@@ -119,6 +119,11 @@ harness at the venv inside your clone, no global install. Works with the
 
 ## Quick start — L2 runtime
 
+### AX8860 Linux backend
+
+The Linux backend keeps this runtime but replaces Apple MLX engines with three
+remote AX8860 llama-server services. See [AX8860 backend](docs/AX8860.md).
+
 Two processes. The **bridge** owns the MLX models for TTS and ASR, each pinned
 to its own thread (MLX GPU streams are thread-bound — see the devlog). The
 **server** owns segmentation, routing, the in-process MLX LLM/MT, and the

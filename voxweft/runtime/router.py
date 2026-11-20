@@ -248,7 +248,8 @@ class SessionRoutes:
                  default_hotwords: dict | None = None,
                  use_llm_translator: bool = True,
                  use_llm_zh_to_sea: bool = False,
-                 voice_role: str | None = None):
+                 voice_role: str | None = None,
+                 voice_mode: str = "reference"):
         self.mode = mode
         self.src = normalize(src_lang)
         self.tgt = normalize(tgt_lang)
@@ -256,12 +257,15 @@ class SessionRoutes:
         self.translate = route_translate(
             self.src, self.tgt, use_llm_translator, use_llm_zh_to_sea)
         self.voice_role = voice_role or DEFAULT_VOICE
+        self.voice_mode = "default" if voice_mode == "default" else "reference"
 
     def voice_id(self, role: str | None = None) -> str:
         """Voice to ask the bridge for. Convention: `<tgt-iso>_tgt` for the
         interpreter (the voice that speaks the translation), `<tgt-iso>_agent`
         for dialogue; the bridge falls back to its default when the id is not
         installed, so this is a preference, not a requirement."""
+        if self.voice_mode == "default":
+            return ""
         r = role or self.voice_role
         if r == "source":
             # Mic-free demo: the *source* text read aloud in the source
@@ -273,7 +277,7 @@ class SessionRoutes:
     def describe(self) -> str:
         return (f"{display(self.src)}→{display(self.tgt)} "
                 f"[{self.mode}] ASR={self.asr.backend} "
-                f"MT={self.translate.backend} voice={self.voice_role}")
+                f"MT={self.translate.backend} voice={self.voice_role}/{self.voice_mode}")
 
     def __repr__(self):
         return f"SessionRoutes({self.describe()})"

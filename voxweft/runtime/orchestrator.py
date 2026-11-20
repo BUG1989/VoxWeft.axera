@@ -79,6 +79,7 @@ class Orchestrator:
         hotwords: Optional[list[str]] = None,
         default_hotwords: Optional[dict] = None,
         voice_role: Optional[str] = None,
+        voice_mode: str = "reference",
         smart_turn=None,
         use_smart_turn: bool = True,
         use_llm_translator: bool = True,
@@ -98,6 +99,7 @@ class Orchestrator:
             use_llm_translator=use_llm_translator,
             use_llm_zh_to_sea=use_llm_zh_to_sea,
             voice_role=voice_role,
+            voice_mode=voice_mode,
         )
         # 对话模式的回复语言默认等于用户语言（同语言问答），也可显式指定
         self.reply_lang = LR.normalize(reply_lang or tgt_lang)

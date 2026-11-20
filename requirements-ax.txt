@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+numpy
+soundfile
+requests
+websockets
+scipy
+pytest

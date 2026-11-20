@@ -159,6 +159,19 @@ def test_session_routes_agent_mode():
     print("✓ test_session_routes_agent_mode")
 
 
+def test_session_routes_reference_and_preset_voice_modes():
+    reference = LR.SessionRoutes("zh", "en", voice_mode="reference")
+    assert reference.voice_mode == "reference"
+    assert reference.voice_id() == "en_tgt"
+    assert reference.voice_id("source") == "zh_src"
+
+    preset = LR.SessionRoutes("zh", "en", voice_mode="default")
+    assert preset.voice_mode == "default"
+    assert preset.voice_id() == ""
+    assert "voice=interpreter/default" in preset.describe()
+    print("✓ test_session_routes_reference_and_preset_voice_modes")
+
+
 if __name__ == "__main__":
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     failed = 0

@@ -33,11 +33,13 @@ import json
 import logging
 import os
 import time
+from contextlib import asynccontextmanager
+from pathlib import Path
 
 import numpy as np
 import uvicorn
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 log = logging.getLogger("voxweft.server")
 logging.basicConfig(level=logging.INFO,
@@ -47,10 +49,11 @@ logging.basicConfig(level=logging.INFO,
 API_KEY = os.environ.get("VOXWEFT_API_KEY", "")
 BRIDGE_URL = os.environ.get("VOXWEFT_BRIDGE_URL", "http://localhost:8133")
 LLM_DIR = os.environ.get("VOXWEFT_LLM_DIR", "")
+AX_BACKEND = os.environ.get("VOXWEFT_BACKEND", "").strip().lower() == "ax8860"
 GLOSSARY_PATH = os.environ.get(
     "VOXWEFT_GLOSSARY_PATH",
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "glossary.json"))
-USE_LLM_TRANSLATOR = bool(LLM_DIR)
+USE_LLM_TRANSLATOR = AX_BACKEND or bool(LLM_DIR)
 USE_LLM_ZH_TO_SEA = (os.environ.get("VOXWEFT_USE_LLM_ZH_TO_SEA")
                      or os.environ.get("VOXWEFT_USE_LLM_ZH_TO_LO", "0")) == "1"
 # SmartTurn v3 endpointing. Measured net-negative for interpretation (it is a
@@ -78,13 +81,81 @@ DEFAULT_HOTWORDS = {
     "lao_Laoo": ["ວຽງຈັນ", "ນະຄອນຫຼວງວຽງຈັນ", "ຫຼວງພະບາງ", "ອາຊຽນ", "ກອງປະຊຸມ",
                  "ເສດຖະກິດດິຈິຕອນ", "ປັນຍາປະດິດ", "ເອໄອ", "ພື້ນຖານໂຄງລ່າງ"],
     "zho_Hans": ["东盟", "数字经济", "人工智能", "基础设施", "同声传译",
-                 "端侧", "切段", "出声", "端到端", "时延", "本地推理"],
+                 "端侧", "切段", "出声", "端到端", "时延", "本地推理",
+                 "AX8860", "VoxWeft", "AXERA", "爱芯元智"],
+    "eng_Latn": ["AX8860", "VoxWeft", "AXERA", "Axera", "simultaneous interpretation"],
     "tha_Thai": ["อาเซียน", "การประชุม"],
     "khm_Khmr": ["អាស៊ាន", "សេដ្ឋកិច្ចឌីជីថល"],
     "mya_Mymr": ["အာဆီယံ", "စီးပွားရေး"],
 }
 
-app = FastAPI(title="voxweft runtime")
+
+AX_DEMO_INTROS = {
+    "zh": [
+        "VoxWeft 正在 AX8860 上运行实时同声传译。",
+        "语音识别、翻译和语音合成都在本地完成，数据不出板卡。",
+        "这条演示文本用于无麦克风测试。",
+    ],
+    "en": [
+        "VoxWeft is running realtime interpretation on AX8860.",
+        "Recognition, translation, and speech synthesis all run locally on the board.",
+        "This demo line is used for microphone-free testing.",
+    ],
+    "ja": [
+        "VoxWeft は AX8860 上でリアルタイム通訳を実行しています。",
+        "認識、翻訳、音声合成はすべてボード上でローカルに処理されます。",
+        "このデモはマイクなしのテスト用です。",
+    ],
+    "ko": [
+        "VoxWeft는 AX8860에서 실시간 통역을 실행하고 있습니다.",
+        "인식, 번역, 음성 합성은 모두 보드에서 로컬로 처리됩니다.",
+        "이 데모는 마이크 없이 테스트할 때 사용합니다.",
+    ],
+    "fr": [
+        "VoxWeft exécute une interprétation en temps réel sur AX8860.",
+        "La reconnaissance, la traduction et la synthèse vocale restent sur la carte.",
+        "Cette phrase sert au test sans microphone.",
+    ],
+    "de": [
+        "VoxWeft führt simultanes Dolmetschen auf AX8860 aus.",
+        "Erkennung, Übersetzung und Sprachsynthese laufen lokal auf der Platine.",
+        "Dieser Text dient dem Test ohne Mikrofon.",
+    ],
+    "ru": [
+        "VoxWeft выполняет синхронный перевод на AX8860.",
+        "Распознавание, перевод и синтез речи работают локально на плате.",
+        "Эта фраза предназначена для теста без микрофона.",
+    ],
+    "es": [
+        "VoxWeft ejecuta interpretación simultánea en AX8860.",
+        "El reconocimiento, la traducción y la síntesis de voz se procesan localmente.",
+        "Esta frase sirve para probar sin micrófono.",
+    ],
+}
+
+
+def _friendly_ax_error(exc: Exception) -> str:
+    text = str(exc)
+    if "must be different" in text:
+        return "源语言和目标语言不能相同"
+    if "does not advertise" in text:
+        return "当前语言不在 AX Hy-MT2 支持范围内"
+    if "returned empty translation" in text:
+        return "翻译服务返回空结果，已重试仍失败"
+    if "Connection" in text or "Timeout" in text or "timeout" in text:
+        return f"板端服务连接超时：{text}"
+    return text
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    # AX8860 warmup only queries lightweight /models endpoints. Keeping model
+    # loading on the board avoids importing Apple MLX on Linux.
+    if AX_BACKEND:
+        await _load_engines()
+    yield
+
+
+app = FastAPI(title="voxweft runtime", lifespan=_lifespan)
 _engines: dict = {}
 _engines_lock = asyncio.Lock()
 
@@ -97,13 +168,48 @@ def _check_api_key(token: str | None) -> bool:
 
 @app.get("/health")
 async def health():
-    return JSONResponse({"status": "ok", "service": "voxweft-runtime",
-                         "translator_loaded": "translator" in _engines})
+    payload = {"status": "ok", "service": "voxweft-runtime",
+               "backend": "ax8860" if AX_BACKEND else "mlx",
+               "translator_loaded": "translator" in _engines}
+    if AX_BACKEND:
+        from voxweft.runtime import ax8860
+        payload["ax8860"] = await asyncio.to_thread(ax8860.health)
+    return JSONResponse(payload)
+
+
+@app.get("/")
+async def index():
+    return FileResponse(Path(__file__).with_name("ax_web.html"))
+
+
+@app.get("/demo/intro")
+async def demo_intro(lang: str = "zh"):
+    """Return a mic-free demo script in a language the current UI supports."""
+    from voxweft import db as voice_db
+    from voxweft.runtime.router import normalize
+    code = normalize(lang)
+    aliases = {
+        "zho_Hans": "zh", "eng_Latn": "en", "jpn_Jpan": "ja", "kor_Hang": "ko",
+        "fra_Latn": "fr", "deu_Latn": "de", "rus_Cyrl": "ru", "spa_Latn": "es",
+    }
+    iso = aliases.get(code, "en")
+    if AX_BACKEND and iso in AX_DEMO_INTROS:
+        return {"lang": iso, "lines": AX_DEMO_INTROS[iso]}
+    try:
+        lines = voice_db.intro_lines(iso, voice_db.connect(voice_db.SEED))
+    except Exception:
+        lines = []
+    if not lines:
+        lines = voice_db.intro_lines("en", voice_db.connect(voice_db.SEED))
+    return {"lang": iso, "lines": lines}
 
 
 # ── bridge clients (ASR / TTS live in the other process) ──────────────────────
 
 def _bridge_asr(audio: np.ndarray, language: str | None, hotwords) -> dict:
+    if AX_BACKEND:
+        from voxweft.runtime import ax8860
+        return ax8860.transcribe(audio, language, hotwords)
     import requests
     import soundfile as sf
     t0 = time.perf_counter()
@@ -132,6 +238,9 @@ def _bridge_tts_stream(text: str, voice: str | None = None):
     to the bridge default. Closing this generator closes the HTTP response,
     which makes the bridge's producer thread fail its next write and stop —
     that is how an interrupt reaches the TTS."""
+    if AX_BACKEND:
+        from voxweft.runtime import ax8860
+        return ax8860.synthesize_stream(text, voice)
     import requests
     body = {"target_text": text, "stream": True}
     if voice:
@@ -208,6 +317,11 @@ def _ensure_bridge_voice():
     """Log which voices the bridge has. The bridge installs the seed voices
     from voxweft.db itself; this is a visibility check so a bridge that came
     up without them is obvious in the server log, not a silent zero-shot."""
+    if AX_BACKEND:
+        from voxweft.runtime import ax8860
+        available = sum(1 for item in ax8860.available_voices() if item.get("available"))
+        log.info("AX8860 backend: %d reference voices available; missing ids use preset", available)
+        return
     import requests
     try:
         d = requests.get(f"{BRIDGE_URL}/voices", timeout=10).json()
@@ -303,6 +417,19 @@ async def _load_engines():
         if "translator" in _engines:
             return
         loop = asyncio.get_event_loop()
+        if AX_BACKEND:
+            from voxweft.runtime import ax8860
+            from voxweft.runtime.ax8860 import AXHyMT2Translator
+            translator = AXHyMT2Translator()
+            try:
+                await loop.run_in_executor(None, translator.warmup)
+            except Exception as exc:
+                log.warning("AX8860 HY-MT2 warmup failed: %s", exc)
+            _engines["translator"] = translator
+            await loop.run_in_executor(None, _ensure_bridge_voice)
+            log.info("engines ready (backend=ax8860, asr=%s, mt=%s, tts=%s)",
+                     ax8860.AX_ASR_BASE, ax8860.AX_MT_BASE, ax8860.AX_TTS_BASE)
+            return
         if USE_LLM_TRANSLATOR:
             from voxweft.runtime.translator import HybridTranslator
             log.info("translator: HybridTranslator LLM=%s (NLLB fallback opt-in)", LLM_DIR)
@@ -363,7 +490,7 @@ async def ws_voice_v2(ws: WebSocket, token: str = Query(default="")):
             slog.warning("send_bytes failed: %s", e)
 
     state = {"mode": "interpreter", "src": "zho_Hans", "tgt": "eng_Latn",
-             "hotwords": [], "orch": None}
+             "hotwords": [], "voice_mode": "default", "orch": None}
     ptt_active = False
     frame_buf = b""
 
@@ -392,6 +519,7 @@ async def ws_voice_v2(ws: WebSocket, token: str = Query(default="")):
             smart_turn=_get_smart_turn(), use_smart_turn=SMART_TURN,
             use_llm_translator=USE_LLM_TRANSLATOR, use_llm_zh_to_sea=USE_LLM_ZH_TO_SEA,
             voice_role="agent_default" if state["mode"] == "agent" else "interpreter",
+            voice_mode=state["voice_mode"],
             system_prompt=AGENT_SYSTEM_PROMPT)
         state["orch"] = orch
         orch.llm_missing = llm_missing
@@ -454,11 +582,37 @@ async def ws_voice_v2(ws: WebSocket, token: str = Query(default="")):
             mt = obj.get("type")
 
             if mt == "session_config":
-                state["mode"] = obj.get("mode") or state["mode"]
-                state["src"] = obj.get("src_lang") or state["src"]
-                state["tgt"] = obj.get("tgt_lang") or state["tgt"]
-                state["hotwords"] = obj.get("hotwords") or []
-                orch = await _build_orch()
+                new_mode = obj.get("mode") or state["mode"]
+                new_src = obj.get("src_lang") or state["src"]
+                new_tgt = obj.get("tgt_lang") or state["tgt"]
+                new_hotwords = obj.get("hotwords") or []
+                new_voice_mode = "default" if obj.get("voice_mode") == "default" else "reference"
+                if AX_BACKEND:
+                    from voxweft.runtime import ax8860
+                    try:
+                        ax8860.validate_language_pair(new_src, new_tgt)
+                    except Exception as exc:
+                        await send_json({
+                            "type": "error", "stage": "session_config",
+                            "message": _friendly_ax_error(exc),
+                        })
+                        continue
+                unchanged = (
+                    new_mode == state["mode"]
+                    and new_src == state["src"]
+                    and new_tgt == state["tgt"]
+                    and new_hotwords == state["hotwords"]
+                    and new_voice_mode == state["voice_mode"]
+                )
+                state.update(mode=new_mode, src=new_src, tgt=new_tgt,
+                             hotwords=new_hotwords, voice_mode=new_voice_mode)
+                if unchanged and state.get("orch") is not None:
+                    # A browser text submit used to re-send an identical
+                    # session_config; rebuilding the orchestrator interrupted
+                    # the previous still-playing TTS turn.
+                    orch = state["orch"]
+                else:
+                    orch = await _build_orch()
                 ack = {"type": "session_config_ack", "success": not orch.llm_missing,
                        "mode": state["mode"], "routes": orch.routes.describe()}
                 if orch.llm_missing:
@@ -584,7 +738,8 @@ async def _text_turn(orch, text: str, send_json, speak_source: bool = True):
             await orch._synth_and_send(0, tr.get("text", ""), orch.routes.voice_role)
             await send_json({"type": "turn_end", "sentences": 1, "total_ms": 0})
     except Exception as e:
-        await send_json({"type": "error", "stage": "text_input", "message": str(e)})
+        message = _friendly_ax_error(e) if AX_BACKEND else str(e)
+        await send_json({"type": "error", "stage": "text_input", "message": message})
 
 
 async def _speak_text(orch, text: str, seq: int, send_json):
@@ -601,8 +756,9 @@ def main(argv=None):
     ap.add_argument("--port", type=int, default=int(os.environ.get("PORT", "3100")))
     ap.add_argument("--host", default="0.0.0.0")
     args = ap.parse_args(argv)
-    log.info("voxweft runtime on ws://%s:%d/ws/voice/v2 (bridge %s, LLM %s)",
-             args.host, args.port, BRIDGE_URL, LLM_DIR or "<none: NLLB fallback>")
+    log.info("voxweft runtime on ws://%s:%d/ws/voice/v2 (backend=%s, bridge=%s, LLM=%s)",
+             args.host, args.port, "ax8860" if AX_BACKEND else "mlx",
+             BRIDGE_URL, LLM_DIR or "<none: NLLB fallback>")
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
 
 
