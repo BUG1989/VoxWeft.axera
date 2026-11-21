@@ -158,6 +158,41 @@ ssh -L 3100:127.0.0.1:3100 <user>@<runtime-host>
 http://127.0.0.1:3100/
 ```
 
+### 可选：局域网 HTTPS 入口
+
+浏览器只在 secure context 中开放麦克风 API。除 SSH tunnel 外，也可以在本机启动
+HTTPS 反向代理。先生成一张包含本机 IP 的自签名证书：
+
+```bash
+mkdir -p .certs
+openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 3650 \
+  -subj "/CN=<runtime-host>" \
+  -addext "subjectAltName=IP:<runtime-host>,IP:127.0.0.1,DNS:localhost" \
+  -keyout .certs/voxweft-axera.key \
+  -out .certs/voxweft-axera.crt
+chmod 700 .certs
+chmod 600 .certs/voxweft-axera.key .certs/voxweft-axera.crt
+```
+
+启动代理：
+
+```bash
+VOXWEFT_HTTPS_HOST=0.0.0.0 \
+VOXWEFT_HTTPS_PORT=3443 \
+VOXWEFT_BACKEND_HOST=127.0.0.1 \
+VOXWEFT_BACKEND_PORT=3100 \
+node scripts/https_proxy.js
+```
+
+访问：
+
+```text
+https://<runtime-host>:3443/
+```
+
+自签名证书会触发浏览器警告。确认证书里的 IP 或域名正确后，可以选择继续访问；
+生产环境建议使用受信任的内部 CA 或公共域名证书。
+
 ---
 
 ## 基本使用

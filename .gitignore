@@ -25,6 +25,7 @@ app/*.app
 voxweft-ax-resource-monitor*.csv
 voxweft-ax-stress-*.csv
 .env.ax.local
+.certs/
 docs-internal/
 # design candidates are large and unpicked; only <lang>_<role>.wav + voices.json ship
 samples/voices/*_[0-9].wav
