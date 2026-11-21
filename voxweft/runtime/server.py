@@ -89,6 +89,9 @@ DEFAULT_HOTWORDS = {
     "mya_Mymr": ["အာဆီယံ", "စီးပွားရေး"],
 }
 
+_SPEECH_SENTENCE_END = "。！？!?；;"
+_SPEECH_CLAUSE_END = "，,、：:"
+
 
 AX_DEMO_INTROS = {
     "zh": [
@@ -697,6 +700,83 @@ async def ws_voice_v2(ws: WebSocket, token: str = Query(default="")):
         slog.info("session closed")
 
 
+def _split_speech_text(text: str, max_chars: int = 180) -> list[str]:
+    """Split long text into speech-sized chunks for streaming TTS.
+
+    A long article can exceed a single TTS request's practical frame/audio limit,
+    causing synthesis to stop before the end. Sentence-sized chunks keep every
+    request comfortably below that limit while preserving natural punctuation.
+    A clause fallback protects unpunctuated input.
+    """
+    value = " ".join(str(text or "").split())
+    if not value:
+        return []
+
+    sentences: list[str] = []
+    start = 0
+    for index, char in enumerate(value):
+        sentence_end = char in _SPEECH_SENTENCE_END
+        # An ASCII period ends a sentence only before whitespace or EOF; this
+        # avoids splitting decimal numbers and version strings such as 3.5.
+        if char == ".":
+            sentence_end = index + 1 == len(value) or value[index + 1].isspace()
+        if not sentence_end:
+            continue
+        sentence = value[start:index + 1].strip()
+        if sentence:
+            sentences.append(sentence)
+        start = index + 1
+    tail = value[start:].strip()
+    if tail:
+        sentences.append(tail)
+
+    chunks: list[str] = []
+    for sentence in sentences:
+        if len(sentence) <= max_chars:
+            chunks.append(sentence)
+            continue
+
+        # First split an overlong sentence at natural clause boundaries.
+        parts: list[str] = []
+        start = 0
+        for index, char in enumerate(sentence):
+            if char not in _SPEECH_CLAUSE_END:
+                continue
+            part = sentence[start:index + 1].strip()
+            if part:
+                parts.append(part)
+            start = index + 1
+        tail = sentence[start:].strip()
+        if tail:
+            parts.append(tail)
+
+        # Pack clauses, then hard-wrap any pathological unpunctuated remainder.
+        buffer = ""
+        for part in parts:
+            if buffer and len(buffer) + len(part) > max_chars:
+                chunks.append(buffer)
+                buffer = ""
+            if len(part) <= max_chars:
+                buffer += part
+                continue
+            if buffer:
+                chunks.append(buffer)
+                buffer = ""
+            for index in range(0, len(part), max_chars):
+                chunks.append(part[index:index + max_chars])
+        if buffer:
+            chunks.append(buffer)
+
+    return chunks
+
+
+async def _speak_text_in_chunks(orch, text: str, voice_role: str) -> int:
+    chunks = _split_speech_text(text)
+    for chunk in chunks:
+        await orch._synth_and_send(0, chunk, voice_role)
+    return len(chunks)
+
+
 async def _text_turn(orch, text: str, send_json, speak_source: bool = True):
     """text_input: skip ASR. Interpreter ⇒ MT ⇒ TTS; agent ⇒ LLM ⇒ TTS."""
     try:
@@ -729,14 +809,16 @@ async def _text_turn(orch, text: str, send_json, speak_source: bool = True):
             # opt out with speak_source=false.
             if speak_source:
                 await send_json({"type": "source_audio", "seq": 0, "text": text})
-                await orch._synth_and_send(0, text, "source")
+                await _speak_text_in_chunks(orch, text, "source")
             tr = await orch._run_blocking(orch.engines["translate"].translate,
                                           text, orch.routes.src, orch.routes.tgt)
+            translated = tr.get("text", "")
             await send_json({"type": "translation", "seq": 0, "src": text,
-                             "text": tr.get("text", ""),
+                             "text": translated,
                              "latency_ms": round(tr.get("latency_ms", 0))})
-            await orch._synth_and_send(0, tr.get("text", ""), orch.routes.voice_role)
-            await send_json({"type": "turn_end", "sentences": 1, "total_ms": 0})
+            sentence_count = await _speak_text_in_chunks(
+                orch, translated, orch.routes.voice_role)
+            await send_json({"type": "turn_end", "sentences": sentence_count, "total_ms": 0})
     except Exception as e:
         message = _friendly_ax_error(e) if AX_BACKEND else str(e)
         await send_json({"type": "error", "stage": "text_input", "message": message})
