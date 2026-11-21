@@ -28,7 +28,8 @@ def test_ax_web_contains_product_controls():
     for marker in (
         "单页操作台", "当前模型", "板端资源", "译员音色", "播放演示文本",
         "导出", "自动重连", "指标口径说明", "本轮指标与电平",
-        "data-help=\"metrics\"", "nodeAsr",
+        "data-help=\"metrics\"", "nodeAsr", "micSupported",
+        "浏览器禁用麦克风", "navigator.mediaDevices",
     ):
         assert marker in html
     assert "cmm_total_mb.toFixed(1)} MB" in html

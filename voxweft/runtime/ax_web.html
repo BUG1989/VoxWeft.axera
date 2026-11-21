@@ -292,6 +292,7 @@ let manualDisconnect=false, reconnectAttempts=0, reconnectTimer=null, lastConfig
 let connectionId=0;
 let demoQueue=[], demoTimer=null, activeAudioSources=new Set();
 let micLevelValue=0, outLevelValue=0;
+const micSupported=Boolean(navigator.mediaDevices?.getUserMedia);
 const stages={asr:$('nodeAsr'),mt:$('nodeMt'),tts:$('nodeTts')}, wires={asr:$('wireAsr'),mt:$('wireMt')};
 const languageNames={zh:'ZH',en:'EN',ja:'JA',ko:'KO',fr:'FR',de:'DE',ru:'RU',es:'ES'};
 
@@ -300,6 +301,16 @@ function setStatus(text,tone='normal') {
 }
 function setNotice(text) { notice=text||''; noticeEl.textContent=notice; }
 function setMetric(id,value) { $(id).textContent=value; }
+function updateMicAvailability(connected=false) {
+  if(!micSupported) {
+    $('talk').disabled=true;
+    $('talk').textContent='浏览器禁用麦克风';
+    if(connected) setNotice('当前页面不是 localhost / HTTPS，浏览器禁用麦克风；请使用文字输入、演示按钮或 SSH tunnel。');
+    return;
+  }
+  $('talk').disabled=!(connected || ws?.readyState===1);
+  if($('talk').disabled) $('talk').textContent='按住此处说话';
+}
 function pushMicLevel(samples) {
   let sum=0; for(let i=0;i<samples.length;i++) sum+=samples[i]*samples[i];
   const rms=Math.sqrt(sum/Math.max(1,samples.length));
@@ -426,7 +437,7 @@ function connect() {
   manualDisconnect=false; clearTimeout(reconnectTimer);
   const url=new URL($('server').value,location.href);
   ws=new WebSocket(url); ws.binaryType='arraybuffer'; setStatus('连接中…');
-  ws.onopen=()=>{ reconnectAttempts=0; setStatus('已连接','good'); $('connect').disabled=true; $('disconnect').disabled=false; $('talk').disabled=false; $('interrupt').disabled=false; setStage('listening'); configure(true); };
+  ws.onopen=()=>{ reconnectAttempts=0; setStatus('已连接','good'); $('connect').disabled=true; $('disconnect').disabled=false; updateMicAvailability(true); $('interrupt').disabled=false; setStage('listening'); configure(true); };
   ws.onclose=()=>{
     if(currentConnection!==connectionId) return;
     stopPlayback();
@@ -437,7 +448,7 @@ function connect() {
       clearTimeout(reconnectTimer); reconnectTimer=setTimeout(connect,delay);
     } else {
       setStatus(manualDisconnect?'未连接':'自动重连失败'); $('connect').disabled=false; $('disconnect').disabled=true;
-      $('talk').disabled=true; $('interrupt').disabled=true; setStage('idle'); stopMic();
+      updateMicAvailability(false); $('interrupt').disabled=true; setStage('idle'); stopMic();
     }
   };
   ws.onerror=()=>setStatus('连接错误','error');
@@ -489,6 +500,7 @@ function downsample(input,inputRate,outputRate) {
   for(let i=0;i<length;i++){const at=i*ratio,lo=Math.floor(at),hi=Math.min(lo+1,input.length-1),frac=at-lo;out[i]=input[lo]*(1-frac)+input[hi]*frac;} return out;
 }
 async function startMic() {
+  if(!micSupported) { updateMicAvailability(ws?.readyState===1); return; }
   if(recording||!ws||ws.readyState!==1) return;
   try {
     mediaStream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
@@ -507,6 +519,7 @@ async function startMic() {
   } catch(err) { setNotice(`麦克风错误：${err}`); stopMic(); }
 }
 function stopMic() {
+  if(!micSupported) { updateMicAvailability(ws?.readyState===1); return; }
   if(recording) send({type:'ptt_end'});
   recording=false; $('talk')?.classList.remove('recording'); if($('talk')) $('talk').textContent='按住此处说话';
   if(recording===false && ws?.readyState===1) setStage('asr');
@@ -549,6 +562,7 @@ $('textForm').onsubmit=e=>{
   send({type:'text_input',text,speak_source:false}); $('textInput').value='';
 };
 $('server').value=defaultServer(); $('connect').onclick=connect;
+updateMicAvailability(false);
 setStage('idle'); updateRoute(); renderTurns(); loadHealth(); setInterval(loadHealth,5000);
 setInterval(renderLevels,50);
 
