@@ -142,6 +142,19 @@ def test_interpreter_event_order():
     print("✓ test_interpreter_event_order")
 
 
+def test_interpreter_empty_asr_still_ends_turn():
+    """File-upload clients count segment/turn pairs; empty ASR must terminate."""
+    eng = {"asr": FakeASR(""), "translate": FakeTranslator(), "tts": FakeTTS()}
+    orch, h, loop = make(eng)
+    drive(orch, h, loop, tone(40) + silence(20))
+    ts = h.types()
+    assert "asr" in ts, ts
+    assert "turn_end" in ts, ts
+    assert ts.index("asr") < ts.index("turn_end"), ts
+    assert "translation" not in ts, ts
+    print("✓ test_interpreter_empty_asr_still_ends_turn")
+
+
 def test_interpreter_has_no_llm():
     """同传是转述，不该有 LLM 事件。"""
     eng = {"asr": FakeASR(), "translate": FakeTranslator(), "tts": FakeTTS(),

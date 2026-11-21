@@ -31,6 +31,8 @@ def test_ax_web_contains_product_controls():
         "data-help=\"metrics\"", "nodeAsr", "micSupported",
         "浏览器禁用麦克风", "navigator.mediaDevices", "如何启用麦克风",
         "SSH tunnel", ".talk.unavailable",
+        "导入音频", "audioFileInput", "decodeAudioFileToMono16k",
+        "uploadAudioFile", "音频导入完成",
     ):
         assert marker in html
     assert "cmm_total_mb.toFixed(1)} MB" in html

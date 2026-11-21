@@ -301,6 +301,11 @@ class Orchestrator:
             "type": "asr", "seq": seq, "text": src_text,
             "latency_ms": round(asr_res.get("latency_ms", 0))})
         if not src_text:
+            # Empty ASR is still a completed turn. Without this terminal event a
+            # file-upload client would otherwise wait forever for its turn count.
+            await self.send_json({
+                "type": "turn_end", "seq": seq, "sentences": 0,
+                "total_ms": round((time.perf_counter() - t0) * 1000)})
             return
 
         # 故障注入。**只有显式设了环境变量才生效**，默认是死的。
@@ -329,10 +334,9 @@ class Orchestrator:
                 "type": "translation", "seq": seq, "src": src_text,
                 "text": hit, "latency_ms": 0, "origin": "canon"})
             await self._synth_and_send(seq, hit, self.routes.voice_role)
-            if seq == self._seq:
-                await self.send_json({
-                    "type": "turn_end", "sentences": 1,
-                    "total_ms": round((time.perf_counter() - t0) * 1000)})
+            await self.send_json({
+                "type": "turn_end", "seq": seq, "sentences": 1,
+                "total_ms": round((time.perf_counter() - t0) * 1000)})
             return
 
         tr = await self._run_blocking(
@@ -356,17 +360,15 @@ class Orchestrator:
             if err:
                 await self.send_json({"type": "error", "seq": seq,
                                       "stage": "translate", "message": str(err)})
-            if seq == self._seq:
-                await self.send_json({
-                    "type": "turn_end", "sentences": 0,
-                    "total_ms": round((time.perf_counter() - t0) * 1000)})
+            await self.send_json({
+                "type": "turn_end", "seq": seq, "sentences": 0,
+                "total_ms": round((time.perf_counter() - t0) * 1000)})
             return
 
         await self._synth_and_send(seq, tgt_text, self.routes.voice_role)
-        if seq == self._seq:
-            await self.send_json({
-                "type": "turn_end", "sentences": 1,
-                "total_ms": round((time.perf_counter() - t0) * 1000)})
+        await self.send_json({
+            "type": "turn_end", "seq": seq, "sentences": 1,
+            "total_ms": round((time.perf_counter() - t0) * 1000)})
 
     # ── 模式 B · 对话 ───────────────────────────────────────────────────────
 

@@ -23,6 +23,7 @@ Qwen3-ASR → HY-MT2 → VoxCPM2
   - 输入 / 输出音频电平
   - 板端 OS / CMM / RSS / NPU 温度状态
 - 文本输入模式，跳过 ASR 直接测试翻译和合成
+- 导入本地录音文件，浏览器解码后走同一条实时 ASR / 翻译 / TTS 链路
 - 内置无麦克风演示文本
 - VoxCPM2 默认音色与参考音色两种模式
 - WebSocket 自动重连和本地播放打断
@@ -246,6 +247,41 @@ curl -sS http://127.0.0.1:3100/health | python3 -m json.tool
 ```
 
 WebUI 会逐句发送 AX8860 专用演示文本，走同一条翻译和 TTS 链路。
+
+### 5. 导入录音文件
+
+点击右侧会话控制中的：
+
+```text
+导入
+```
+
+支持浏览器可解码的常见音频格式，例如：
+
+```text
+WAV / MP3 / M4A / AAC / OGG / FLAC / WebM
+```
+
+浏览器会把文件解码为：
+
+```text
+mono 16 kHz PCM
+```
+
+再通过 WebSocket 送入 VoxWeft runtime。服务端仍使用实时切句，随后执行：
+
+```text
+Qwen3-ASR → HY-MT2 → VoxCPM2
+```
+
+限制：
+
+```text
+文件不超过 100 MB
+时长不超过 10 分钟
+```
+
+导入音频不依赖麦克风权限，因此远程 HTTP 页面也可以使用。
 
 ---
 

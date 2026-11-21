@@ -105,8 +105,8 @@
     .language-row > span { color:var(--weft); text-align:center; line-height:34px; }
     label { display:grid; gap:3px; color:var(--muted); font-size:10px; }
     select { min-height:32px; padding:0 6px; color:var(--text); background:rgba(0,0,0,.25); border:1px solid var(--hair); border-radius:7px; }
-    .side-actions { display:grid; grid-template-columns:1fr 1fr 1fr; gap:5px; }
-    .side-actions button { min-height:30px; padding:5px 6px; font-size:11px; }
+    .side-actions { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:4px; }
+    .side-actions button { min-height:29px; padding:4px 4px; font-size:10.5px; }
     .talk { width:100%; height:47px; font-size:15px; color:#03110e; background:linear-gradient(135deg,var(--warp),var(--weft)); border-radius:10px; box-shadow:0 0 18px rgba(41,245,194,.18); }
     .talk.recording { background:linear-gradient(135deg,var(--spring),var(--weft)); }
     .talk.unavailable { color:var(--danger); background:rgba(255,135,133,.12); border:1px solid rgba(255,135,133,.38); box-shadow:none; }
@@ -242,6 +242,8 @@
           <button id="interrupt" class="danger" disabled>打断</button>
           <button id="resetSession" class="ghost">重置</button>
           <button id="playIntro" class="ghost" type="button">演示</button>
+          <button id="uploadAudio" class="ghost" type="button" title="导入本地录音文件">导入</button>
+          <input id="audioFileInput" type="file" accept="audio/*,.wav,.mp3,.m4a,.aac,.ogg,.flac,.webm" hidden>
         </div>
       </div>
     </section>
@@ -293,6 +295,7 @@ let manualDisconnect=false, reconnectAttempts=0, reconnectTimer=null, lastConfig
 let connectionId=0;
 let demoQueue=[], demoTimer=null, activeAudioSources=new Set();
 let micLevelValue=0, outLevelValue=0;
+let uploadActive=false, uploadSending=false, uploadSegments=0, uploadCompleted=0, uploadTimer=null;
 const micSupported=Boolean(navigator.mediaDevices?.getUserMedia);
 const stages={asr:$('nodeAsr'),mt:$('nodeMt'),tts:$('nodeTts')}, wires={asr:$('wireAsr'),mt:$('wireMt')};
 const languageNames={zh:'ZH',en:'EN',ja:'JA',ko:'KO',fr:'FR',de:'DE',ru:'RU',es:'ES'};
@@ -347,7 +350,10 @@ function setStage(stage) {
 function updateRoute() {
   const same=$('src').value===$('tgt').value;
   $('routeText').textContent=same?'源语言和目标语言不能相同':`${$('src').value} → ${$('tgt').value}`;
-  $('sendText').disabled=activeTurn||same; $('sendText').textContent=same?'语言相同':(activeTurn?'生成中…':'发送');
+  const busy=activeTurn||uploadActive;
+  $('sendText').disabled=busy||same; $('sendText').textContent=same?'语言相同':(busy?'生成中…':'发送');
+  $('uploadAudio').disabled=uploadActive||activeTurn||recording;
+  $('audioFileInput').disabled=uploadActive||activeTurn||recording;
 }
 
 function turnIndexFor(ev) {
@@ -436,7 +442,9 @@ function configure(force=false) {
 }
 function setBusy(value) {
   activeTurn=value; updateRoute();
-  $('src').disabled=value; $('tgt').disabled=value;
+  const busy=value||uploadActive;
+  $('src').disabled=busy; $('tgt').disabled=busy;
+  $('uploadAudio').disabled=busy; $('audioFileInput').disabled=busy;
 }
 function connect() {
   if(ws) ws.close();
@@ -464,21 +472,42 @@ function connect() {
 function handleJson(ev) {
   switch(ev.type) {
     case 'ready': setStage('listening'); break;
+    case 'ptt_ack':
+      if(ev.recording===false) {
+        uploadSending=false;
+        // A segment can be committed synchronously during ptt_end and arrive
+        // immediately around the terminal PTT ack. Briefly defer the no-segment
+        // decision instead of finishing the upload too early.
+        setTimeout(maybeFinishUpload,1000);
+      }
+      break;
     case 'session_config_ack':
       reconnectAttempts=0;
       setNotice($('voiceMode').value==='reference' && $('tgt').value==='ru'
         ? '俄语暂无内置参考音色，将自动使用 VoxCPM2 默认音色' : '');
       break;
-    case 'segment_committed': addTurn({seq:Number(ev.seq||0),id:`seq-${ev.seq}-${Date.now()}`,src:'',out:''}); setBusy(true); setStage('asr'); break;
+    case 'segment_committed':
+      if(uploadActive) uploadSegments++;
+      addTurn({seq:Number(ev.seq||0),id:`seq-${ev.seq}-${Date.now()}`,src:'',out:''}); setBusy(true); setStage('asr'); break;
     case 'asr': patchTurn(ev,{src:ev.text||'',asrMs:Math.round(ev.latency_ms||0)}); setMetric('mAsr',`${Math.round(ev.latency_ms||0)} ms`); setStage('mt'); break;
     case 'translation': patchTurn(ev,{out:ev.text||'',mtMs:Math.round(ev.latency_ms||0)}); setMetric('mMt',`${Math.round(ev.latency_ms||0)} ms`); setStage('tts'); break;
     case 'audio_start': patchTurn(ev,{firstAudioMs:Math.round(ev.tts_latency_ms||0)}); setMetric('mTts',`${Math.round(ev.tts_latency_ms||0)} ms`); setStage('tts'); break;
     case 'audio_end': patchTurn(ev,{audioS:(ev.samples||0)/48000}); setMetric('mAudio',`${((ev.samples||0)/48000).toFixed(2)} s`); break;
     case 'turn_end':
+      if(uploadActive) { uploadCompleted++; maybeFinishUpload(); }
       setBusy(false); setStage('idle'); if(configDirty) configure(true); sendNextDemoLine(); break;
-    case 'interrupted': setNotice(`已打断：${ev.reason||''}`); setBusy(false); setStage('idle'); sendNextDemoLine(); break;
-    case 'no_speech': setNotice(ev.too_quiet?'音量太小，未检出语音':'未检出语音'); setBusy(false); setStage('idle'); break;
-    case 'error': setNotice(`${ev.stage||'pipeline'}: ${ev.message||''}`); setBusy(false); setStage('idle'); break;
+    case 'interrupted':
+      setNotice(`已打断：${ev.reason||''}`);
+      if(uploadActive && ev.reason!=='ptt_start') finishUpload(true);
+      setBusy(false); setStage('idle'); sendNextDemoLine(); break;
+    case 'no_speech':
+      setNotice(ev.too_quiet?'音量太小，未检出语音':'未检出语音');
+      if(uploadActive) finishUpload(true);
+      setBusy(false); setStage('idle'); break;
+    case 'error':
+      setNotice(`${ev.stage||'pipeline'}: ${ev.message||''}`);
+      if(uploadActive) { uploadCompleted++; maybeFinishUpload(); }
+      setBusy(false); setStage('idle'); break;
   }
 }
 function playPcm(buffer) {
@@ -491,6 +520,89 @@ function playPcm(buffer) {
   const src=playContext.createBufferSource(); src.buffer=bufferNode; src.connect(playContext.destination);
   src.onended=()=>activeAudioSources.delete(src); activeAudioSources.add(src);
   const now=playContext.currentTime; playTime=Math.max(now+.04,playTime); src.start(playTime); playTime+=bufferNode.duration;
+}
+
+function sleep(ms) { return new Promise(resolve=>setTimeout(resolve,ms)); }
+
+async function decodeAudioFileToMono16k(file) {
+  const maxBytes=100*1024*1024, maxSeconds=600;
+  if(file.size>maxBytes) throw new Error('音频文件不能超过 100 MB');
+  const arrayBuffer=await file.arrayBuffer();
+  const AudioContextClass=window.AudioContext||window.webkitAudioContext;
+  if(!AudioContextClass) throw new Error('浏览器不支持音频解码');
+  const context=new AudioContextClass({sampleRate:16000});
+  try {
+    const decoded=await context.decodeAudioData(arrayBuffer);
+    if(!decoded.length) throw new Error('音频文件为空');
+    if(decoded.duration>maxSeconds) throw new Error('音频文件不能超过 10 分钟');
+    const channels=decoded.numberOfChannels, length=decoded.length;
+    let mono=new Float32Array(length);
+    for(let ch=0; ch<channels; ch++) {
+      const data=decoded.getChannelData(ch);
+      for(let i=0;i<length;i++) mono[i]+=data[i]/channels;
+    }
+    if(decoded.sampleRate!==16000) mono=downsample(mono,decoded.sampleRate,16000);
+    return mono;
+  } finally {
+    try{await context.close();}catch{}
+  }
+}
+
+function maybeFinishUpload() {
+  if(!uploadActive || uploadSending || uploadCompleted<uploadSegments) return;
+  finishUpload(false);
+}
+
+function finishUpload(interrupted) {
+  if(!uploadActive) return;
+  uploadActive=false; uploadSending=false;
+  clearTimeout(uploadTimer); uploadTimer=null;
+  $('uploadAudio').textContent='导入';
+  setNotice(interrupted?'音频导入已停止':`音频导入完成：${uploadCompleted}/${uploadSegments} 段`);
+  setBusy(false); setStage('idle');
+}
+
+async function uploadAudioFile(file) {
+  if(uploadActive||activeTurn||recording||demoQueue.length) return;
+  if(!ws||ws.readyState!==1) { setNotice('请先连接服务'); return; }
+  try {
+    uploadActive=true; uploadSending=true; uploadSegments=0; uploadCompleted=0;
+    setBusy(true); setStage('listening');
+    $('uploadAudio').textContent='导入中…';
+    setNotice(`正在解码音频：${file.name}`);
+    const samples=await decodeAudioFileToMono16k(file);
+    setNotice(`正在导入音频：${file.name} · ${(samples.length/16000).toFixed(2)}s`);
+    send({type:'ptt_start'});
+    setStage('asr');
+
+    // Append 0.5 s of silence so a natural sentence boundary can commit before
+    // ptt_end; the remaining tail is still flushed by the server.
+    const input=new Float32Array(samples.length+8000);
+    input.set(samples);
+    const chunkSamples=4096;
+    for(let offset=0; offset<input.length; offset+=chunkSamples) {
+      const source=input.subarray(offset,Math.min(offset+chunkSamples,input.length));
+      const pcm=new Int16Array(source.length);
+      for(let i=0;i<source.length;i++) {
+        const sample=Math.max(-1,Math.min(1,source[i]));
+        pcm[i]=sample<0?sample*32768:sample*32767;
+      }
+      while(ws.readyState===1 && ws.bufferedAmount>4*1024*1024) await sleep(20);
+      if(ws.readyState!==1) throw new Error('连接已断开');
+      ws.send(pcm.buffer);
+      if((offset/chunkSamples)%16===0) await sleep(0);
+    }
+    send({type:'ptt_end'});
+    clearTimeout(uploadTimer);
+    uploadTimer=setTimeout(()=>{
+      if(uploadActive) { send({type:'interrupt',reason:'upload_timeout'}); finishUpload(true); }
+    },15*60*1000);
+    maybeFinishUpload();
+  } catch(err) {
+    setNotice(`音频导入失败：${err.message||err}`);
+    if(ws?.readyState===1) send({type:'ptt_end'});
+    finishUpload(true);
+  }
 }
 function stopPlayback() {
   for(const source of activeAudioSources) {
@@ -554,6 +666,15 @@ $('talk').onpointerup=e=>{e.preventDefault();stopMic();};
 $('talk').onpointerleave=()=>recording&&stopMic();
 $('src').onchange=configure; $('tgt').onchange=configure; $('voiceMode').onchange=configure;
 $('interrupt').onclick=()=>{stopPlayback();send({type:'interrupt',reason:'webui'});};
+$('uploadAudio').onclick=()=>{
+  if($('uploadAudio').disabled) return;
+  $('audioFileInput').click();
+};
+$('audioFileInput').onchange=async e=>{
+  const file=e.target.files?.[0];
+  e.target.value='';
+  if(file) await uploadAudioFile(file);
+};
 $('exportTurns').onclick=()=>{
   const blob=new Blob([JSON.stringify({exportedAt:new Date().toISOString(),source:$('src').value,target:$('tgt').value,turns},null,2)],{type:'application/json'});
   const url=URL.createObjectURL(blob),a=document.createElement('a');
