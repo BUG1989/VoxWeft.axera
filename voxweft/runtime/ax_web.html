@@ -109,6 +109,7 @@
     .side-actions button { min-height:30px; padding:5px 6px; font-size:11px; }
     .talk { width:100%; height:47px; font-size:15px; color:#03110e; background:linear-gradient(135deg,var(--warp),var(--weft)); border-radius:10px; box-shadow:0 0 18px rgba(41,245,194,.18); }
     .talk.recording { background:linear-gradient(135deg,var(--spring),var(--weft)); }
+    .talk.unavailable { color:var(--danger); background:rgba(255,135,133,.12); border:1px solid rgba(255,135,133,.38); box-shadow:none; }
     .levels { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; }
     .level-row { display:grid; grid-template-columns:24px minmax(0,1fr); align-items:center; gap:4px; }
     .level-row small { color:var(--muted); font-size:9px; }
@@ -303,11 +304,17 @@ function setNotice(text) { notice=text||''; noticeEl.textContent=notice; }
 function setMetric(id,value) { $(id).textContent=value; }
 function updateMicAvailability(connected=false) {
   if(!micSupported) {
-    $('talk').disabled=true;
+    // Keep this button actionable: clicking it explains the browser security
+    // policy and the localhost/SSH-tunnel options instead of showing a dead control.
+    $('talk').disabled=false;
+    $('talk').classList.add('unavailable');
+    $('talk').title='点击查看如何启用麦克风';
     $('talk').textContent='浏览器禁用麦克风';
     if(connected) setNotice('当前页面不是 localhost / HTTPS，浏览器禁用麦克风；请使用文字输入、演示按钮或 SSH tunnel。');
     return;
   }
+  $('talk').classList.remove('unavailable');
+  $('talk').title='';
   $('talk').disabled=!(connected || ws?.readyState===1);
   if($('talk').disabled) $('talk').textContent='按住此处说话';
 }
@@ -500,7 +507,11 @@ function downsample(input,inputRate,outputRate) {
   for(let i=0;i<length;i++){const at=i*ratio,lo=Math.floor(at),hi=Math.min(lo+1,input.length-1),frac=at-lo;out[i]=input[lo]*(1-frac)+input[hi]*frac;} return out;
 }
 async function startMic() {
-  if(!micSupported) { updateMicAvailability(ws?.readyState===1); return; }
+  if(!micSupported) {
+    showHelp('microphone');
+    setNotice('浏览器只在 localhost 或 HTTPS 页面允许麦克风；可先用文字输入或演示按钮。');
+    return;
+  }
   if(recording||!ws||ws.readyState!==1) return;
   try {
     mediaStream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true,autoGainControl:true}});
@@ -529,7 +540,16 @@ function stopMic() {
 $('resetSession').onclick=()=>{turns=[];renderTurns();setNotice('');send({type:'reset'});setStage('listening');};
 $('clear').onclick=()=>{turns=[];renderTurns();setNotice('');};
 $('disconnect').onclick=()=>{manualDisconnect=true;clearTimeout(reconnectTimer);ws?.close();};
-$('talk').onpointerdown=e=>{e.preventDefault();startMic();};
+$('talk').onpointerdown=e=>{
+  e.preventDefault();
+  if(!micSupported) {
+    e.stopPropagation();
+    showHelp('microphone');
+    setNotice('浏览器只在 localhost 或 HTTPS 页面允许麦克风；可先用文字输入或演示按钮。');
+    return;
+  }
+  startMic();
+};
 $('talk').onpointerup=e=>{e.preventDefault();stopMic();};
 $('talk').onpointerleave=()=>recording&&stopMic();
 $('src').onchange=configure; $('tgt').onchange=configure; $('voiceMode').onchange=configure;
@@ -567,6 +587,16 @@ setStage('idle'); updateRoute(); renderTurns(); loadHealth(); setInterval(loadHe
 setInterval(renderLevels,50);
 
 const HELP_INFO={
+  microphone:{
+    title:'如何启用麦克风',
+    html:`<dl>
+      <dt>为什么被禁用</dt><dd>浏览器只在 <b>localhost</b> 或 <b>HTTPS</b> 页面暴露 MediaDevices API。远程 HTTP 页面无法绕过该安全限制。</dd>
+      <dt>方案 1：本机访问</dt><dd>如果浏览器和 VoxWeft runtime 在同一台机器，直接访问 <code>http://127.0.0.1:3100/</code>。</dd>
+      <dt>方案 2：SSH tunnel</dt><dd>在运行浏览器的电脑执行：<code>ssh -N -L 3100:127.0.0.1:3100 &lt;user&gt;@&lt;runtime-host&gt;</code>，然后访问 <code>http://127.0.0.1:3100/</code>。</dd>
+      <dt>方案 3：HTTPS</dt><dd>部署反向代理和有效证书后，通过 HTTPS 域名访问。</dd>
+      <dt>无需麦克风</dt><dd>文字输入和“演示”按钮不依赖麦克风，可完整测试翻译与 TTS。</dd>
+    </dl>`
+  },
   models:{
     title:'当前模型说明',
     html:`<dl>
@@ -614,7 +644,9 @@ function hideHelp() { activeHelpKey=''; helpPopover.hidden=true; }
 document.querySelectorAll('.help').forEach(button=>{
   button.addEventListener('click',event=>{ event.stopPropagation(); showHelp(button.dataset.help); });
 });
-document.addEventListener('click',event=>{ if(!helpPopover.hidden && !helpPopover.contains(event.target)) hideHelp(); });
+document.addEventListener('click',event=>{
+  if(!helpPopover.hidden && !helpPopover.contains(event.target) && !event.target.closest('#talk')) hideHelp();
+});
 document.addEventListener('keydown',event=>{ if(event.key==='Escape') hideHelp(); });
 </script>
 </body>
