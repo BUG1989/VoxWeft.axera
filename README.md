@@ -1,296 +1,380 @@
-<p align="center">
-  <img src="docs/media/logo.png" width="128" alt="VoxWeft">
-</p>
+# VoxWeft AXERA
 
-<h1 align="center">VoxWeft</h1>
+**VoxWeft AXERA** 是面向 **AX8860 / AX8860P** 的实时同声传译运行时。它保留原生
+VoxWeft 的实时切句、编排、打断和 WebSocket 协议，将模型层替换为 AXERA
+`llama.cpp` 服务：
 
-<p align="center">
-  <b>On-device simultaneous interpretation on Apple Silicon and AX8860.</b><br>
-  Speech in, translated speech out, streaming — nothing leaves the machine.
-</p>
+```text
+Qwen3-ASR → HY-MT2 → VoxCPM2
+```
 
-<p align="center">
-  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-2ea44f"></a>
-  <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%20%7C%20AX8860-black">
-  <img alt="Framework" src="https://img.shields.io/badge/inference-MLX-29F5C2">
-  <img alt="Python" src="https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white">
-  <img alt="TTS" src="https://img.shields.io/badge/TTS-VoxCPM2-FA9E5C">
-  <img alt="AX8860" src="https://img.shields.io/badge/AX8860-llama.cpp-29F5C2">
-  <img alt="Cloud" src="https://img.shields.io/badge/cloud-0%20bytes-critical">
-</p>
-
-<p align="center">
-  <img src="docs/media/demo.gif" width="880" alt="VoxWeft interpreting English to French on an M5 MacBook — ASR → LLM → TTS lights up as each stage works; first audio 582 ms">
-</p>
-
-<p align="center"><sub>English → French on a MacBook (M5), no microphone: each line is read in a designed source voice, then interpreted into the target voice. The dashboard glows with whichever model is working. Full clip: <a href="docs/media/showcase.mp4">docs/media/showcase.mp4</a> (70 s, 1.6 MB).</sub></p>
+这个仓库是 **AXERA Linux / WebUI 路线**，不是原生 macOS / Apple MLX 演示仓库。
+原生 VoxWeft 保留在 [HenryZ838978/VoxWeft](https://github.com/HenryZ838978/VoxWeft)。
 
 ---
 
-At the core is our port of [VoxCPM2](https://github.com/OpenBMB/VoxCPM) —
-a 2B tokenizer-free TTS covering 30 languages — to [MLX](https://github.com/ml-explore/mlx):
-zero weight conversion for the LM, bit-exact AudioVAE, a **stateful streaming
-decoder** that gets first audio out in ~170 ms on an M5, ~300 ms on a base M2,
-~150 ms on M3 Ultra; voice cloning from ~5 s of reference audio; 4-bit
-quantization. Verified module-by-module against the official PyTorch
-implementation.
+## 当前能力
 
-Around it: a runtime that turns a microphone into segmented, translated,
-spoken output while the speaker is still talking — and a macOS shell that
-shows you which model is working, and how long each step took.
+- 实时语音同传：`ASR → 翻译 → 流式 TTS`
+- Linux WebUI：
+  - ASR / MT / TTS pipeline 状态灯
+  - 每轮源文 / 译文卡片
+  - ASR、翻译、TTS 首包和输出音频时长
+  - 输入 / 输出音频电平
+  - 板端 OS / CMM / RSS / NPU 温度状态
+- 文本输入模式，跳过 ASR 直接测试翻译和合成
+- 内置无麦克风演示文本
+- VoxCPM2 默认音色与参考音色两种模式
+- WebSocket 自动重连和本地播放打断
+- 转写与译文 JSON 导出
+- 板端资源采样与报告脚本
 
-There is no PyPI or npm package, on purpose: the source is the distribution.
-Clone, install editable, point your agent at the clone.
+当前支持翻译语言：
 
-```bash
-git clone https://github.com/HenryZ838978/VoxWeft && cd VoxWeft
-python -m venv .venv && source .venv/bin/activate
-pip install -e .              # L1: TTS, clone, `voxweft say`
-pip install -e ".[mcp]"       # + MCP server for agent harnesses
-pip install -e ".[runtime]"   # + segmenter, ASR/LLM adapters, WebSocket server
+```text
+zh / en / ja / ko / fr / de / ru / es
 ```
 
-If you are an agent (Claude Code, Codex, Cursor, …) setting this up for a
-user, read [`docs/AGENT-SETUP.md`](docs/AGENT-SETUP.md) — it is written for you.
+当前边界：
+
+- 单会话运行；
+- 每个 llama-server 使用 `-np 1`；
+- 主要面向单用户实时同传，不是多租户服务；
+- 本仓库不负责下载、转换或托管模型权重；
+- 板端三个推理服务需要按各自模型卡预先启动。
 
 ---
 
-## Three layers, one repo
+## 架构
 
+```text
+Browser
+  │ HTTP / WebSocket
+  ▼
+Linux VoxWeft runtime :3100
+  ├── realtime segmenter
+  ├── orchestrator / interruption state machine
+  ├── AX ASR adapter
+  ├── AX HY-MT2 adapter
+  ├── AX VoxCPM2 streaming adapter
+  ├── WebUI + /health
+  └── board resource reader
+        │ HTTP
+        ▼
+AX8860 / AX8860P board
+  ├── Qwen3-ASR-1.7B      :18081  /v1/chat/completions
+  ├── HY-MT2-1.8B         :18082  /v1/chat/completions
+  ├── VoxCPM2              :18083  /v1/audio/speech
+  └── tempmon              :8080   /api/stats
 ```
-              ┌──────────────────────────────────────────────────────┐
-   L3         │  CLI  ·  MCP server  ·  macOS shell (app/)           │  wrappers — thin, replaceable
-              └──────────────────────────────────────────────────────┘
-              ┌──────────────────────────────────────────────────────┐
-   L2         │  segmenter / endpointing  →  ASR  →  MT | LLM        │  runtime — MLX only,
-   runtime    │  language router · orchestrator · /ws/voice/v2       │  models are yours to pick
-              └──────────────────────────────────────────────────────┘
-              ┌──────────────────────────────────────────────────────┐
-   L1         │  VoxCPM2 on MLX: streaming VAE · clone · 4-bit       │  core — ours end to end
-   core       │  `voxweft say`                                       │
-              └──────────────────────────────────────────────────────┘
-```
 
-**L1 is the reason this repo exists.** It is complete, tested against
-goldens, and useful on its own — any agent harness can get a local voice
-through the MCP server in one JSON block.
+`scripts/run_ax8860.sh` 会加载 `.env.ax.local`，因此切换板卡地址不需要修改代码。
 
-**L2 is Lego.** We ship two defaults each for ASR and LLM and the adapters to
-plug them in, but you download the weights. Everything runs on MLX; we do not
-support Ollama or other CPU-first runtimes because they cannot hit the
-latency budget on this hardware.
+---
 
-**L3 is whatever fits.** CLI, MCP, and a ~700-line SwiftUI shell in `app/`
-with hold-to-talk, a live ASR → LLM → TTS dashboard, per-turn latency chips
-and a mic-free demo. Disposable by design.
+## 模型与 API
 
-<p align="center">
-  <img src="docs/media/app-interpreter.jpg" width="880" alt="VoxWeft macOS shell: three interpreted turns with mt / first-audio chips">
-</p>
-<p align="center"><sub>Each card is one segment: source line, interpretation, and what it cost — <code>mt</code> is the LLM, <code>first audio</code> is measured from the moment the text reached VoxCPM2 to the first sample the speaker played.</sub></p>
+| 阶段 | 模型 | 参数量 | 默认端口 | API |
+|---|---|---:|---:|---|
+| ASR | Qwen3-ASR-1.7B | 1.7B | 18081 | `/v1/chat/completions` + `input_audio` |
+| 翻译 | HY-MT2-1.8B | 1.8B | 18082 | `/v1/chat/completions` |
+| TTS | VoxCPM2 | 约 2B | 18083 | `/v1/audio/speech` |
 
-## Quick start — L1
+模型包来自 [AXERA-TECH](https://huggingface.co/AXERA-TECH)，权重和运行时包遵循各自
+模型卡条款。本仓库只包含软件适配层，不重新分发模型权重。
+
+### 音色模式
+
+WebUI 可选择：
+
+- **VoxCPM2 默认音色**：长稳演示推荐，TTS 首包更低；
+- **参考音色**：使用 `samples/voices/` 中的 VoxWeft 音色种子，通过 VoxCPM2
+  `ref_audio` / `ref_text` 做声音克隆。
+
+参考音频会在进程内缓存为 16 kHz PCM，降低每次请求的 Base64 体积和板端内存压力。
+缺失参考音色会自动回退到默认音色。
+
+---
+
+## 安装
+
+要求：
+
+- Linux 主机可访问 AX8860 板卡端口；
+- Python 3.10+；
+- AX8860 板上已运行三个模型服务和 tempmon；
+- HY-MT2 建议以 `--no-cache-prompt` 启动，避免重复 prompt 返回空结果。
+
+### 1. 克隆并创建环境
 
 ```bash
-export VOXCPM2_MODEL=~/.voxweft/models/VoxCPM2      # see docs/MODELS.md
-python scripts/convert_vae.py $VOXCPM2_MODEL        # one-time, audiovae.pth → MLX
+git clone https://github.com/BUG1989/VoxWeft.axera.git
+cd VoxWeft.axera
 
-voxweft say "你好，欢迎使用语音合成服务。" --play
-voxweft say "Guten Morgen, wie geht es Ihnen?" --stream -o out.wav   # prints first-audio ms
-voxweft say "ສະບາຍດີທຸກໆທ່ານ" --ref my_voice.wav -o lao.wav          # clone from ~5 s
+python3.10 -m venv .venv-ax
+.venv-ax/bin/pip install -r requirements-ax.txt
 ```
 
-```python
-from voxweft.core import VoxCPM2Pipeline
+### 2. 配置板卡地址
 
-pipe = VoxCPM2Pipeline(model_dir, inference_timesteps=6, quantize_lm=4)
-for chunk, i in pipe.generate_streaming("text", ref_latents=pipe.encode_reference(ref_16k)):
-    play(chunk)                       # float32 @ 48 kHz
-```
-
-MCP, for Claude Code / Codex / Cursor / anything that speaks MCP — point the
-harness at the venv inside your clone, no global install. Works with the
-`mcp` Python SDK 1.x and 2.x (2.x renamed `FastMCP`; the server adapts):
-
-```jsonc
-{"mcpServers": {"voxweft": {
-    "command": "/path/to/VoxWeft/.venv/bin/voxweft", "args": ["mcp"],
-    "env": {"VOXCPM2_MODEL": "/path/to/models/VoxCPM2"}}}}
-```
-
-## Quick start — L2 runtime
-
-### AX8860 Linux backend
-
-The Linux backend keeps this runtime but replaces Apple MLX engines with three
-remote AX8860 llama-server services. See [AX8860 backend](docs/AX8860.md).
-
-Two processes. The **bridge** owns the MLX models for TTS and ASR, each pinned
-to its own thread (MLX GPU streams are thread-bound — see the devlog). The
-**server** owns segmentation, routing, the in-process MLX LLM/MT, and the
-WebSocket.
+创建本地私有配置文件：
 
 ```bash
-pip install -e ".[runtime]"
-export VOXWEFT_MODEL_DIR=~/.voxweft/models         # VoxCPM2/, Qwen3-ASR-1.7B-8bit/, <llm>/
-export VOXWEFT_LLM_DIR=$VOXWEFT_MODEL_DIR/Qwen3-4B-Instruct-2507-4bit
-export VOXWEFT_VOICE_DIR=samples/voices          # <lang>_tgt.wav → the interpreter's voice per target language
+cat > .env.ax.local <<'ENV'
+AX_BOARD_HOST=<board-ip>
+AX_ASR_BASE=http://<board-ip>:18081/v1
+AX_MT_BASE=http://<board-ip>:18082/v1
+AX_TTS_BASE=http://<board-ip>:18083/v1
+AX_STATS_URL=http://<board-ip>:8080/api/stats
+ENV
 
-voxweft bridge --port 8133 &      # wait for GET /ready → 200
-voxweft serve  --port 3100        # ws://localhost:3100/ws/voice/v2
+chmod 600 .env.ax.local
 ```
 
-Protocol is in the docstring of `voxweft/runtime/server.py`: `session_config`,
-`ptt_start`, int16 PCM frames, `ptt_end`; back come `asr`, `translation`,
-`audio_start` + 48 kHz PCM chunks + `audio_end`, `turn_end`, and `no_speech`
-with the measured level when nothing was cut.
+`.env.ax.local` 已被 Git 忽略，不要提交真实 IP、token 或内网路径。
 
-### Default models
-
-| slot | default | alt | licence |
-|---|---|---|---|
-| TTS | VoxCPM2 (4-bit) | — | Apache-2.0 |
-| ASR | Qwen3-ASR-1.7B **8-bit** via mlx-audio (zh/en/vi/th/id/ms + 20 more) — 2.5 GB, RTF 0.11, transcripts identical to bf16 on our set | bf16 (4.1 GB) · 0.6B | Apache-2.0 |
-| ASR, lo/km/my | whisper-large-v3-turbo (MLX) — routed automatically; **quality is poor** (Lao often comes back in Thai script) | Omnilingual-ASR CTC via sherpa-onnx is the better open option (adapter not written yet) | MIT |
-| LLM / MT | Qwen3-4B-Instruct (mlx-lm) | Qwen3-8B · Hy-MT2-1.8B | Apache-2.0 |
-| MT fallback | NLLB-200-1.3B | — | **CC-BY-NC-4.0**, opt-in, research only |
-
-No model weights are in this repo. `docs/MODELS.md` has download notes
-(ModelScope mirrors where HF is slow).
-
-## What the runtime does that a model download doesn't
-
-* **Cuts while you speak.** Per-frame RMS with an adaptive noise floor,
-  0.45 s silence rule, forced cut at the first ≥100 ms dip after 6 s (hard cut at 9 s), and a *carry* buffer so a
-  0.4 s "So," is prepended to the next segment instead of silently dropped.
-  Learned end-of-turn (SmartTurn v3) is wired in and **off by default** — we
-  measured it net-negative for interpretation and say why.
-* **Routes by language pair, no pivot.** Any pair goes straight through the
-  LLM — es→ms, de→vi, ja→fr are one hop, never via Chinese or English.
-  Only low-resource *targets* (lo/km/my) go to dedicated MT, because a 4B
-  chat model guesses the wrong script when asked to *write* them.
-* **Keeps MLX alive under concurrency.** Thread-pinned executors, no locks
-  across `yield`, warm-up through the same code path as requests. Each of
-  those is a crash we had.
-* **Interrupt actually interrupts.** `ptt_start` or Stop cuts the client
-  stream, cancels the in-flight turn, and shuts the socket to the TTS so the
-  bridge stops synthesizing within one patch — next sentence in ~1 s on M2
-  instead of queuing 20 s behind a dead one.
-* **Reports failure loudly.** A press with no segment returns
-  `no_speech {peak_rms, threshold, too_quiet}` so "nothing said" and "too
-  quiet" can be told apart on the spot instead of in the server log.
-
-## Numbers
-
-Measured on a base **M2 16 GB** with nothing else running (Lark, VPN helpers
-and stray Python killed first — with them resident the same pipeline was
-3–4× slower and free memory was ~100 MB). M3 Ultra figures from the stage
-build.
-
-| stage, in isolation | M2 16 GB | M5 16 GB (MacBook) | M3 Ultra |
-|---|---|---|---|
-| VoxCPM2 4-bit TTS, first audio (warm) | 303 ms | **169 ms** | 124–168 ms |
-| VoxCPM2 4-bit TTS, RTF | **1.47** | 0.94 (with a full desktop session running) | ≈ 0.2 |
-| Qwen3-ASR-1.7B 8-bit, 10 s clip | 1.2 s (RTF 0.11) · bf16: RTF 0.24 | — | — |
-| Qwen3-4B 4-bit, one sentence zh→en | first token 405 ms · 16 tok in 870 ms | — | — |
-| resident memory, all three | **6.7 GB** (bf16 ASR: 8.5) | 6.7 GB | — |
-
-| end to end, `/ws/voice/v2` | M2 16 GB | M5 16 GB | M3 Ultra |
-|---|---|---|---|
-| text → LLM → first interpreted audio, per sentence (the clip above, en→fr) | — | **0.58 / 2.4 / 1.3 s** | — |
-| segment commit → first interpreted audio (worker idle) | ≈ 2.5 s | — | ≈ 0.85 s |
-| per-segment wall time, 5 s of speech out | ≈ 7 s | ≈ 5 s | ≈ 1.5 s |
-| TTS ASR-round-trip CER, repo intro zh / en | 3.4% / 7.8% | | |
-| segmenter, phone mic, ASR CER fixed→adaptive threshold | 16.3% → 10% | | |
-
-On the M2 the pipeline is **TTS-bound**: RTF 1.47 means 5 s of speech takes
-7 s to produce, and the serial worker makes the next segment wait. ASR and
-the LLM together are ~1.5 s and would keep up with real time; the TTS is the
-silicon ceiling (upstream measures the same RTF). On M3 Ultra all three are
-under real time and the pipeline streams.
-
-We do **not** publish BLEU. Translation quality is the property of the model
-you plug in; what this repo owns is that the pipeline does not lose it on
-the way: ASR-round-trip intelligibility of the TTS, first-audio latency, and
-RTF. `bench/` has the scripts.
-
-## Voices
-
-No reference recordings ship. The showcase voices are *designed*: VoxCPM2's
-caption mode (`(A mature man in his fifties, calm broadcaster voice, Castilian
-Spanish)…`) generates candidates, a human picks one per language and role,
-and the pick becomes the clone reference the bridge uses for that target
-language. Convention: source speaker = mature male, interpreter = young
-female, same text in every language — the repo's own two-sentence
-introduction.
-
-22 voices ship in `samples/voices/` (11 languages × src/tgt) and are
-registered in `voxweft.db` — a single SQLite file that is the runtime's
-default configuration: voices, the intro text per language, and the showcase
-route matrix. The bridge installs every voice from it at start-up; nothing to
-configure. `python -m voxweft.db show` dumps it.
-
-To design your own:
+### 3. 启动 Linux runtime
 
 ```bash
-python scripts/design_voices.py --langs de,fr --n 3 --out /tmp/cands
-# listen, mark "pick": true in /tmp/cands/manifest.json, then
-python scripts/pick_voices.py /tmp/cands && cp /tmp/cands/*_{src,tgt}.wav samples/voices/
-python -m voxweft.db build
+scripts/run_ax8860.sh
 ```
 
-`samples/voices/<lang>_src.wav` is also the microphone stand-in for demos:
-`scripts/mock_interpret.py --wav samples/voices/es_src.wav --src es --tgt ms`
-streams it through the real PTT path at real-time pace — segmenter, ASR,
-MT, TTS — with no microphone.
+打开：
 
-## The devlog is part of the product
-
-[`docs/DEVLOG.md`](docs/DEVLOG.md) — every failure we hit, what we were wrong
-about, and what it cost: MLX stream thread binding, a lock held across an
-async `yield` that froze the process, `temperature` that is not a
-temperature, text that the model dutifully read aloud, SwiftPM "building" in 2.8 s
-without compiling, SwiftUI `Button` aborting on macOS 26, a learned
-endpointer that made interpretation worse. A working demo can be
-regenerated by any model; this list cannot.
-
-## Layout
-
-<p align="center"><img src="docs/media/dashboard-idle.jpg" width="560" alt="ASR → LLM → TTS dashboard, idle"></p>
-
+```text
+http://127.0.0.1:3100/
 ```
+
+浏览器只在 `localhost` 或 HTTPS 页面允许麦克风采集。若通过远程 HTTP 访问，
+请使用文本模式或内置演示文本；也可以用 SSH tunnel：
+
+```bash
+ssh -L 3100:127.0.0.1:3100 <user>@<runtime-host>
+```
+
+然后在本机访问：
+
+```text
+http://127.0.0.1:3100/
+```
+
+---
+
+## 基本使用
+
+### 1. 健康检查
+
+```bash
+curl -sS http://127.0.0.1:3100/health | python3 -m json.tool
+```
+
+`/health` 返回：
+
+- 三个推理服务是否在线；
+- 实际加载的 runtime model；
+- 模型名称、参数量和用途；
+- 可用参考音色；
+- 板端 OS / CMM / RSS / 温度快照。
+
+### 2. 文本模式
+
+在 WebUI 底部输入文本，例如：
+
+```text
+人工智能正在改变边缘设备，实时同传必须在本地完成。
+```
+
+流程会跳过 ASR：
+
+```text
+文本 → HY-MT2 → VoxCPM2 → 流式播放
+```
+
+适合无麦克风环境、远程 HTTP 页面和快速回归。
+
+### 3. 按住说话
+
+在 localhost 或 HTTPS 页面中：
+
+1. 选择源语言和目标语言；
+2. 按住按钮说话；
+3. 松开后提交语音段；
+4. 查看 ASR、译文、TTS 首包和输出音频时长；
+5. 需要时点击“打断”。
+
+### 4. 无麦克风演示
+
+点击：
+
+```text
+▶ 播放演示文本
+```
+
+WebUI 会逐句发送 AX8860 专用演示文本，走同一条翻译和 TTS 链路。
+
+---
+
+## WebSocket 示例
+
+最小文本轮次示例：
+
+```bash
+.venv-ax/bin/python - <<'PY'
+import asyncio
+import json
+import websockets
+
+async def main():
+    url = "ws://127.0.0.1:3100/ws/voice/v2"
+    async with websockets.connect(url) as ws:
+        print(json.loads(await ws.recv())["type"])
+
+        await ws.send(json.dumps({
+            "type": "session_config",
+            "mode": "interpreter",
+            "src_lang": "zh",
+            "tgt_lang": "en",
+            "voice_mode": "default",
+        }))
+        print(json.loads(await ws.recv()))
+
+        await ws.send(json.dumps({
+            "type": "text_input",
+            "text": "人工智能正在改变边缘设备。",
+            "speak_source": False,
+        }))
+
+        while True:
+            message = await ws.recv()
+            if isinstance(message, bytes):
+                continue
+            event = json.loads(message)
+            print(event.get("type"), event)
+            if event["type"] in ("turn_end", "error"):
+                break
+
+asyncio.run(main())
+PY
+```
+
+---
+
+## 指标口径
+
+WebUI 中的指标是分段指标，不是完整端到端总耗时。
+
+| 指标 | 含义 | 不包含 |
+|---|---|---|
+| ASR 延迟 | 已提交语音段的 ASR 耗时 | 麦克风采集、VAD、按住按钮等待 |
+| 翻译延迟 | HY-MT2 请求到译文返回 | ASR、TTS |
+| TTS 首包 | TTS 请求到第一块可播放 PCM | ASR、翻译、浏览器调度 |
+| 输出音频 | 已发送 PCM 按 48 kHz 折算时长 | 被打断后未发送部分 |
+
+文本模式的首音频体感耗时可以近似看作：
+
+```text
+翻译延迟 + TTS 首包 + 浏览器播放调度开销
+```
+
+---
+
+## 资源监控
+
+采样板端资源：
+
+```bash
+AX_STATS_URL=http://<board-ip>:8080/api/stats \
+  .venv-ax/bin/python scripts/monitor_ax_resources.py \
+  --output /tmp/ax-resources.csv \
+  --interval 2
+```
+
+生成 Markdown 报告：
+
+```bash
+.venv-ax/bin/python scripts/ax_resource_report.py \
+  /tmp/ax-resources.csv \
+  --markdown
+```
+
+报告包含：
+
+- first / last / min / max；
+- 首尾 10 次采样漂移；
+- 采样错误数；
+- llama 进程数；
+- OS、CMM、RSS 和 NPU 温度。
+
+判断内存问题时，应优先看 warmed-up 后是否出现长期单调增长，而不是单次请求峰值。
+
+---
+
+## 测试
+
+无需连接板卡即可运行核心回归：
+
+```bash
+.venv-ax/bin/python -m pytest
+```
+
+覆盖：
+
+- AX 语言路由；
+- HY-MT2 prompt 与空结果重试；
+- 参考音色 payload；
+- voice mode；
+- WebUI 关键控件；
+- demo 文本接口；
+- orchestrator 状态转移。
+
+---
+
+## 目录结构
+
+```text
 voxweft/
-  core/        model.py · vae.py · generate.py · cli.py          L1
-  runtime/     segmenter · router · orchestrator · translator     L2
-               bridge.py (TTS+ASR HTTP) · server.py (WebSocket)
-  wrappers/    mcp_server.py                                      L3
-app/           SwiftUI macOS shell (hold-to-talk, latency chips, demo)  L3
-tests/         golden alignment (needs model) · segmenter · router · orchestrator (no model)
-bench/         asr / mt / tts benches + ASR-round-trip judge
-scripts/       convert_vae.py · probe_{onset,stream,clone,perf}.py · mock_interpret.py
-docs/          DEVLOG.md · TTS-FINDINGS.md · ARCHITECTURE.md · HARDWARE.md · MODELS.md
-samples/       zero-shot zh / lo output, round-trip verified
+  runtime/
+    ax8860.py        AXERA ASR / MT / TTS adapters
+    ax_web.html      Linux WebUI
+    server.py        FastAPI + WebSocket runtime
+    orchestrator.py  realtime turn state machine
+    segmenter.py     audio segmentation / endpointing
+    router.py        language and backend routing
+
+scripts/
+  run_ax8860.sh            runtime launcher
+  monitor_ax_resources.py  board resource sampler
+  ax_resource_report.py    CSV summary report
+
+samples/voices/
+  bundled reference voices and transcripts
+
+docs/AX8860.md
+  additional deployment notes
 ```
+
+原生 macOS / Apple MLX 代码仍保留在仓库中，但不是这条 AXERA 路线的默认入口。
+
+---
 
 ## Credits
 
-- [HenryZ838978/VoxWeft](https://github.com/HenryZ838978/VoxWeft) — the
-  original native VoxWeft project. The AX8860 backend reuses its real-time
-  segmenter, orchestrator, interruption model, WebSocket protocol, multilingual
-  voice seed set, and product vocabulary. The macOS shell also provided the
-  reference layout for the Linux WebUI dashboard and per-turn latency cards.
-- [OpenBMB/VoxCPM](https://github.com/OpenBMB/VoxCPM) — the model. Tokenizer-free
-  turned out to be exactly right for low-resource languages: no RVQ codebook
-  to be out-of-distribution on.
-- [ml-explore/mlx](https://github.com/ml-explore/mlx) — the array framework
-  that made the port a one-day job (and the debugging a two-week one).
-- Qwen3-ASR, mlx-lm, mlx-audio, pipecat SmartTurn — the Lego.
-- [AXERA-TECH](https://huggingface.co/AXERA-TECH) — the AX8860 llama.cpp model
-  packages used by the Linux backend, including Qwen3-ASR, HY-MT2, and VoxCPM2.
+- [HenryZ838978/VoxWeft](https://github.com/HenryZ838978/VoxWeft) —
+  原生项目。本仓库复用其实时切句、orchestrator、打断模型、WebSocket 协议、
+  多语言音色种子和产品交互语义；Linux WebUI 的 dashboard 与每轮 latency card
+  也参考了原生 macOS Shell。
+- [AXERA-TECH](https://huggingface.co/AXERA-TECH) —
+  AX8860 llama.cpp 模型包，包括 Qwen3-ASR、HY-MT2 和 VoxCPM2。
+- [OpenBMB/VoxCPM](https://github.com/OpenBMB/VoxCPM) —
+  VoxCPM2 原始模型与实现。
+- Qwen / Hy-MT2 相关模型和依赖保持各自 license 与上游条款。
+
+---
 
 ## License
 
-VoxWeft is released under the [Apache License 2.0](LICENSE). See
-[NOTICE](NOTICE) for upstream attribution and separate model-weight terms.
-Model checkpoints and board runtime packages remain under their own licenses
-and are not distributed by this repository.
+本仓库使用 [Apache License 2.0](LICENSE)。上游声明和模型权重边界见
+[NOTICE](NOTICE)。
+
+模型 checkpoint、板端 runtime 包和 NPU kernel 不由本仓库分发，请从各自官方发布地址
+获取并遵循其条款。

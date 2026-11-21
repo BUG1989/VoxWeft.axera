@@ -1,29 +1,31 @@
 [project]
 name = "voxweft"
 version = "0.1.0"
-description = "On-device simultaneous interpretation & voice dialogue on Apple Silicon — VoxCPM2 on MLX at the core"
+description = "Realtime simultaneous interpretation on AX8860 with Qwen3-ASR, HY-MT2, and VoxCPM2 through llama.cpp"
 readme = "README.md"
 license = {text = "Apache-2.0"}
 requires-python = ">=3.10"
 authors = [{name = "VoxWeft contributors"}]
-keywords = ["tts", "mlx", "apple-silicon", "simultaneous-interpretation", "voxcpm", "voice-clone", "speech-to-speech"]
+keywords = ["ax8860", "axera", "llama.cpp", "simultaneous-interpretation", "qwen3-asr", "voxcpm2", "voice-clone"]
 dependencies = [
-    "mlx>=0.30",
     "numpy",
-    "transformers>=4.50",
     "soundfile",
     "scipy",
+    "requests",
+    "fastapi",
+    "uvicorn",
+    "websockets",
 ]
 
 [project.urls]
-Homepage = "https://github.com/HenryZ838978/VoxWeft"
-Repository = "https://github.com/HenryZ838978/VoxWeft"
-Issues = "https://github.com/HenryZ838978/VoxWeft/issues"
-Devlog = "https://github.com/HenryZ838978/VoxWeft/blob/main/docs/DEVLOG.md"
+Homepage = "https://github.com/BUG1989/VoxWeft.axera"
+Repository = "https://github.com/BUG1989/VoxWeft.axera"
+Issues = "https://github.com/BUG1989/VoxWeft.axera/issues"
+Documentation = "https://github.com/BUG1989/VoxWeft.axera/blob/main/docs/AX8860.md"
 
 [project.optional-dependencies]
-# L2 runtime: bridge (TTS+ASR HTTP) + WebSocket server + MLX LLM/ASR adapters.
-runtime = [
+# Optional native Apple MLX path retained from upstream VoxWeft.
+native = [
     "fastapi",
     "uvicorn",
     "pydantic",
@@ -31,6 +33,7 @@ runtime = [
     "mlx-lm>=0.31",
     "mlx-audio>=0.5",
     "mlx-whisper",
+    "transformers>=4.50",
 ]
 # Optional endpointing model (measured net-negative for interpretation; see docs/DEVLOG.md).
 smartturn = ["pipecat-ai"]
