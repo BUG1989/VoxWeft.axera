@@ -3,118 +3,150 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>VoxWeft AX8860</title>
+  <title>VoxWeft AXERA</title>
   <style>
     :root {
       color-scheme: dark;
-      --ink:#050b0c; --paper:#070e10; --panel:#041013; --card:rgba(41,245,194,.045);
+      --ink:#050b0c; --paper:#070e10; --panel:rgba(4,16,19,.72); --card:rgba(41,245,194,.045);
       --hair:rgba(41,245,194,.14); --text:#e9f7f4; --muted:#91a7ad;
       --warp:#4fd6ff; --weft:#29f5c2; --spring:#8cfd8c; --danger:#ff8785;
     }
     * { box-sizing:border-box; }
-    body { margin:0; min-height:100vh; background:radial-gradient(circle at top, rgba(41,245,194,.07), transparent 42%), var(--paper); color:var(--text); font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif; }
+    html, body { height:100%; }
+    body {
+      margin:0; overflow:hidden; color:var(--text);
+      background:radial-gradient(circle at 18% 0, rgba(41,245,194,.08), transparent 34%), var(--paper);
+      font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+      display:grid; grid-template-rows:56px 76px minmax(0,1fr);
+    }
     button, input, select { font:inherit; }
-    button { border:0; border-radius:10px; padding:10px 14px; font-weight:700; cursor:pointer; }
+    button { border:0; border-radius:9px; padding:9px 12px; font-weight:750; cursor:pointer; }
     button:disabled { opacity:.42; cursor:not-allowed; }
-    .primary { background:linear-gradient(135deg,var(--weft),var(--warp)); color:#041114; box-shadow:0 0 20px rgba(41,245,194,.20); }
+    .primary { background:linear-gradient(135deg,var(--weft),var(--warp)); color:#041114; box-shadow:0 0 18px rgba(41,245,194,.18); }
     .ghost { background:rgba(255,255,255,.07); color:var(--text); border:1px solid var(--hair); }
     .danger { background:rgba(255,135,133,.13); color:var(--danger); border:1px solid rgba(255,135,133,.38); }
     .quiet { background:rgba(255,255,255,.04); color:var(--muted); border:1px solid var(--hair); }
-    header { position:sticky; top:0; z-index:5; display:flex; align-items:center; gap:14px; padding:14px 22px; background:rgba(4,16,19,.94); border-bottom:1px solid var(--hair); backdrop-filter:blur(12px); }
-    .logo { width:38px; height:38px; border-radius:10px; display:grid; place-items:center; background:linear-gradient(135deg,rgba(79,214,255,.18),rgba(41,245,194,.18)); border:1px solid var(--hair); color:var(--weft); font-weight:900; box-shadow:0 0 18px rgba(41,245,194,.15); }
-    .title h1 { margin:0; font-size:19px; letter-spacing:.3px; }
-    .title small { color:var(--muted); }
-    .header-status { min-width:180px; margin-left:auto; color:var(--muted); font-size:12px; text-align:right; }
-    .dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:#718096; margin-right:6px; vertical-align:1px; }
-    .dot.on { background:var(--weft); box-shadow:0 0 10px var(--weft); }
-    .server { display:flex; gap:8px; align-items:center; }
-    .server input { width:min(330px,32vw); min-height:38px; padding:0 10px; border-radius:9px; border:1px solid var(--hair); background:rgba(0,0,0,.25); color:var(--text); font-family:ui-monospace,monospace; font-size:12px; }
 
-    .pipeline { display:grid; grid-template-columns:1fr; padding:20px 22px 18px; background:linear-gradient(90deg,rgba(41,245,194,.035),transparent); border-bottom:1px solid var(--hair); }
-    .pipe-label { margin-bottom:11px; color:var(--muted); font-size:10px; font-family:ui-monospace,monospace; letter-spacing:3.2px; text-transform:uppercase; text-align:center; }
-    .pipe-row { display:flex; align-items:center; justify-content:center; gap:0; min-width:min(720px,90vw); margin:auto; }
-    .node { position:relative; width:118px; height:58px; display:grid; place-content:center; text-align:center; border-radius:15px; border:1px solid rgba(79,214,255,.15); color:rgba(79,214,255,.35); background:rgba(79,214,255,.02); transition:.25s; }
-    .node b { display:block; font-size:18px; letter-spacing:1.5px; }
-    .node span { display:block; margin-top:2px; font-size:8.5px; letter-spacing:1.2px; text-transform:uppercase; }
+    header { display:flex; align-items:center; gap:13px; padding:0 18px; background:rgba(4,16,19,.95); border-bottom:1px solid var(--hair); }
+    .logo { width:34px; height:34px; flex:0 0 34px; border-radius:9px; display:grid; place-items:center; background:linear-gradient(135deg,rgba(79,214,255,.20),rgba(41,245,194,.18)); border:1px solid var(--hair); color:var(--weft); font-weight:900; }
+    .title h1 { margin:0; font-size:16px; line-height:1.15; }
+    .title small { color:var(--muted); font-size:11px; }
+    .header-status { margin-left:auto; color:var(--muted); font-size:11px; white-space:nowrap; }
+    .dot { display:inline-block; width:7px; height:7px; border-radius:50%; background:#718096; margin-right:5px; vertical-align:1px; }
+    .dot.on { background:var(--weft); box-shadow:0 0 9px var(--weft); }
+    .server { display:flex; gap:7px; align-items:center; }
+    .server input { width:min(310px,27vw); min-height:34px; padding:0 9px; border-radius:8px; border:1px solid var(--hair); background:rgba(0,0,0,.25); color:var(--text); font-family:ui-monospace,monospace; font-size:11px; }
+
+    .pipeline { display:grid; grid-template-columns:210px minmax(0,1fr); align-items:center; gap:14px; padding:9px 18px; border-bottom:1px solid var(--hair); background:linear-gradient(90deg,rgba(41,245,194,.035),transparent); }
+    .pipe-heading { display:grid; gap:2px; }
+    .pipe-heading b { font-size:12px; }
+    .pipe-heading small { color:var(--muted); font-size:10px; }
+    .pipe-row { display:flex; align-items:center; justify-content:center; gap:0; min-width:0; }
+    .node { position:relative; width:108px; height:48px; display:grid; place-content:center; text-align:center; border-radius:13px; border:1px solid rgba(79,214,255,.15); color:rgba(79,214,255,.36); background:rgba(79,214,255,.02); transition:.22s; }
+    .node b { display:block; font-size:16px; letter-spacing:1.3px; }
+    .node span { display:block; margin-top:1px; font-size:8px; letter-spacing:1.1px; text-transform:uppercase; }
     .node.asr { --node:var(--warp); }
     .node.mt { --node:var(--weft); }
     .node.tts { --node:var(--spring); }
-    .node.done { color:var(--node); border-color:color-mix(in srgb,var(--node) 45%,transparent); background:color-mix(in srgb,var(--node) 8%,transparent); box-shadow:0 0 14px color-mix(in srgb,var(--node) 14%,transparent); }
-    .node.active { color:var(--node); border-color:var(--node); background:color-mix(in srgb,var(--node) 15%,transparent); box-shadow:0 0 22px color-mix(in srgb,var(--node) 28%,transparent); animation:breathe 1.8s ease-in-out infinite; transform:scale(1.025); }
-    @keyframes breathe { 50% { box-shadow:0 0 32px color-mix(in srgb,var(--node) 44%,transparent); } }
-    .wire { position:relative; width:clamp(28px,7vw,66px); height:6px; }
+    .node.done { color:var(--node); border-color:color-mix(in srgb,var(--node) 45%,transparent); background:color-mix(in srgb,var(--node) 8%,transparent); box-shadow:0 0 12px color-mix(in srgb,var(--node) 13%,transparent); }
+    .node.active { color:var(--node); border-color:var(--node); background:color-mix(in srgb,var(--node) 14%,transparent); box-shadow:0 0 20px color-mix(in srgb,var(--node) 27%,transparent); animation:breathe 1.8s ease-in-out infinite; transform:scale(1.02); }
+    @keyframes breathe { 50% { box-shadow:0 0 30px color-mix(in srgb,var(--node) 43%,transparent); } }
+    .wire { position:relative; width:clamp(24px,6vw,58px); height:6px; }
     .wire i { position:absolute; inset:auto 0 2px; height:2px; background:var(--hair); }
-    .wire.done i { background:rgba(41,245,194,.42); box-shadow:0 0 8px rgba(41,245,194,.22); }
+    .wire.done i { background:rgba(41,245,194,.42); box-shadow:0 0 8px rgba(41,245,194,.20); }
     .wire.active i { background:var(--weft); }
     .wire.active em { position:absolute; top:0; width:5px; height:5px; border-radius:50%; background:var(--weft); box-shadow:0 0 8px var(--weft); animation:flow .9s linear infinite; }
     @keyframes flow { from { left:0; } to { left:calc(100% - 5px); } }
 
-    .layout { display:grid; grid-template-columns:minmax(0,1.55fr) minmax(330px,.85fr); gap:18px; width:min(1420px,100%); margin:0 auto; padding:18px 22px 34px; }
-    @media(max-width:1050px){ .layout { grid-template-columns:1fr; } header { flex-wrap:wrap; } .header-status { text-align:left; } }
-    section, aside { border:1px solid var(--hair); border-radius:16px; background:rgba(4,16,19,.72); }
-    .conversation { display:flex; min-height:64vh; max-height:82vh; }
-    .conversation-main { display:flex; flex-direction:column; flex:1; min-width:0; }
-    .section-head { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:15px 18px; border-bottom:1px solid var(--hair); }
-    .section-head b { font-size:15px; }
-    .section-head small { color:var(--muted); }
-    .turns { flex:1; overflow:auto; padding:18px; display:grid; align-content:start; gap:16px; }
-    .turn-card { padding:16px; border-radius:15px; background:var(--card); border:1px solid var(--hair); box-shadow:0 0 18px rgba(41,245,194,.06); }
-    .turn-line { display:grid; grid-template-columns:38px minmax(0,1fr); gap:12px; align-items:baseline; }
-    .turn-line + .turn-line { margin-top:10px; }
-    .turn-tag { font-family:ui-monospace,monospace; font-size:10px; font-weight:800; letter-spacing:.5px; }
+    .layout { min-height:0; display:grid; grid-template-columns:minmax(0,1fr) 390px; gap:12px; padding:12px 18px 14px; }
+    section, aside { border:1px solid var(--hair); border-radius:14px; background:var(--panel); }
+
+    .conversation { min-height:0; display:grid; grid-template-rows:44px minmax(0,1fr) auto 58px; overflow:hidden; }
+    .section-head { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:0 13px; border-bottom:1px solid var(--hair); }
+    .section-head b { font-size:13px; }
+    .section-right { display:flex; align-items:center; gap:6px; }
+    .section-right small { color:var(--muted); }
+    .section-right button { padding:5px 8px; font-size:11px; }
+    .turns { min-height:0; overflow:auto; padding:12px; display:grid; align-content:start; gap:10px; scrollbar-width:thin; }
+    .turn-card { padding:12px; border-radius:13px; background:var(--card); border:1px solid var(--hair); }
+    .turn-line { display:grid; grid-template-columns:34px minmax(0,1fr); gap:9px; align-items:baseline; }
+    .turn-line + .turn-line { margin-top:7px; }
+    .turn-tag { font-family:ui-monospace,monospace; font-size:10px; font-weight:800; }
     .source .turn-tag { color:var(--warp); }
     .target .turn-tag { color:var(--weft); }
-    .source .turn-text { color:var(--muted); font-size:14px; line-height:1.55; }
-    .target .turn-text { color:var(--text); font-size:22px; font-weight:650; line-height:1.48; }
-    .ribbon { display:flex; flex-wrap:wrap; gap:6px; margin:12px 0 0 50px; }
-    .chip { padding:4px 9px; border-radius:999px; border:1px solid var(--hair); background:rgba(0,0,0,.18); color:var(--muted); font-family:ui-monospace,monospace; font-size:11px; }
-    .chip.hot { color:var(--spring); border-color:rgba(140,253,140,.48); background:rgba(140,253,140,.10); }
-    .empty { margin:auto; max-width:540px; text-align:center; color:var(--muted); }
-    .empty .logo { width:70px; height:70px; margin:0 auto 18px; font-size:25px; }
-    .empty b { display:block; margin-bottom:8px; color:var(--text); font-size:16px; }
-    .notice { min-height:24px; padding:9px 18px; color:var(--danger); font-size:12px; border-top:1px solid rgba(255,135,133,.16); }
-    .composer { display:flex; gap:9px; padding:14px 18px; border-top:1px solid var(--hair); background:rgba(0,0,0,.12); }
-    .composer input { flex:1; min-width:0; min-height:40px; padding:0 12px; color:var(--text); background:rgba(0,0,0,.25); border:1px solid var(--hair); border-radius:10px; }
+    .source .turn-text { color:var(--muted); font-size:13px; line-height:1.45; overflow-wrap:anywhere; }
+    .target .turn-text { color:var(--text); font-size:19px; font-weight:650; line-height:1.42; overflow-wrap:anywhere; }
+    .ribbon { display:flex; flex-wrap:wrap; gap:5px; margin:9px 0 0 43px; }
+    .chip { padding:3px 7px; border-radius:999px; border:1px solid var(--hair); background:rgba(0,0,0,.18); color:var(--muted); font-family:ui-monospace,monospace; font-size:10px; }
+    .chip.hot { color:var(--spring); border-color:rgba(140,253,140,.45); background:rgba(140,253,140,.09); }
+    .empty { margin:auto; max-width:480px; text-align:center; color:var(--muted); }
+    .empty .logo { width:62px; height:62px; margin:0 auto 14px; font-size:22px; }
+    .empty b { display:block; margin-bottom:7px; color:var(--text); font-size:15px; }
+    .empty div { font-size:12px; line-height:1.55; }
+    .notice { min-height:24px; padding:5px 13px; color:var(--danger); font-size:11px; border-top:1px solid rgba(255,135,133,.15); }
+    .composer { display:flex; gap:8px; align-items:center; padding:10px 13px; border-top:1px solid var(--hair); background:rgba(0,0,0,.12); }
+    .composer input { flex:1; min-width:0; min-height:37px; padding:0 11px; color:var(--text); background:rgba(0,0,0,.25); border:1px solid var(--hair); border-radius:9px; }
 
-    aside { display:grid; align-content:start; gap:18px; padding:16px; }
-    .side-title { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:12px; }
-    .side-title b { font-size:14px; }
-    .side-title small { color:var(--muted); }
-    .model-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:9px; }
-    .model-card { padding:11px; border-radius:11px; background:rgba(0,0,0,.20); border:1px solid var(--hair); }
-    .model-stage { color:var(--muted); font-size:11px; }
-    .model-name { margin-top:3px; font-size:14px; font-weight:750; }
-    .model-meta { margin-top:5px; color:var(--muted); font-size:11px; line-height:1.45; }
-    .resource-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
-    .level-row { display:grid; grid-template-columns:38px minmax(0,1fr); align-items:center; gap:8px; }
-    .level-row small { color:var(--muted); }
-    .level-bar { height:7px; border-radius:999px; background:rgba(255,255,255,.08); overflow:hidden; }
+    aside { min-height:0; display:grid; grid-template-rows:auto auto auto minmax(0,1fr); gap:8px; padding:9px; overflow:auto; scrollbar-width:thin; }
+    .panel { border:1px solid var(--hair); border-radius:11px; background:rgba(0,0,0,.15); padding:9px; position:relative; }
+    .panel-title { min-height:20px; display:flex; align-items:center; gap:6px; margin-bottom:7px; }
+    .panel-title b { font-size:12px; }
+    .panel-title small { color:var(--muted); font-size:10px; margin-left:auto; }
+    .help { width:17px; height:17px; flex:0 0 17px; padding:0; border-radius:50%; display:grid; place-items:center; background:rgba(79,214,255,.12); border:1px solid rgba(79,214,255,.30); color:var(--warp); font-size:10px; }
+    .models { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:5px; }
+    .model-card { min-width:0; padding:6px; border-radius:8px; background:rgba(0,0,0,.20); border:1px solid var(--hair); }
+    .model-stage { color:var(--muted); font-size:9px; }
+    .model-name { margin-top:2px; font-size:11px; font-weight:750; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .model-meta { margin-top:3px; color:var(--muted); font-size:9px; line-height:1.35; }
+    .model-meta:last-child { color:var(--weft); }
+
+    .settings { display:grid; gap:6px; }
+    .language-row { display:grid; grid-template-columns:minmax(0,1fr) 14px minmax(0,1fr); gap:5px; align-items:end; }
+    .language-row > span { color:var(--weft); text-align:center; line-height:34px; }
+    label { display:grid; gap:3px; color:var(--muted); font-size:10px; }
+    select { min-height:32px; padding:0 6px; color:var(--text); background:rgba(0,0,0,.25); border:1px solid var(--hair); border-radius:7px; }
+    .side-actions { display:grid; grid-template-columns:1fr 1fr 1fr; gap:5px; }
+    .side-actions button { min-height:30px; padding:5px 6px; font-size:11px; }
+    .talk { width:100%; height:47px; font-size:15px; color:#03110e; background:linear-gradient(135deg,var(--warp),var(--weft)); border-radius:10px; box-shadow:0 0 18px rgba(41,245,194,.18); }
+    .talk.recording { background:linear-gradient(135deg,var(--spring),var(--weft)); }
+    .levels { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; }
+    .level-row { display:grid; grid-template-columns:24px minmax(0,1fr); align-items:center; gap:4px; }
+    .level-row small { color:var(--muted); font-size:9px; }
+    .level-bar { height:5px; border-radius:999px; background:rgba(255,255,255,.08); overflow:hidden; }
     .level-fill { display:block; height:100%; width:0%; border-radius:999px; background:linear-gradient(90deg,var(--warp),var(--weft)); transition:width 60ms linear; }
-    .settings { display:grid; gap:10px; }
-    .language-row { display:grid; grid-template-columns:1fr auto 1fr; gap:8px; align-items:center; }
-    .language-row span { color:var(--weft); }
-    label { display:grid; gap:5px; color:var(--muted); font-size:11px; }
-    select,input[type=text] { min-height:38px; padding:0 9px; color:var(--text); background:rgba(0,0,0,.25); border:1px solid var(--hair); border-radius:9px; }
-    .talk { width:100%; min-height:82px; font-size:18px; color:#03110e; background:linear-gradient(135deg,var(--warp),var(--weft)); border-radius:15px; box-shadow:0 0 22px rgba(41,245,194,.22); }
-    .talk.recording { background:linear-gradient(135deg,var(--spring),var(--weft)); box-shadow:0 0 30px rgba(140,253,140,.30); }
-    .side-actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
-    .hint { color:var(--muted); font-size:11px; line-height:1.55; }
-    .metrics { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
-    .metric { padding:10px; border-radius:10px; background:rgba(0,0,0,.20); border:1px solid var(--hair); }
-    .metric small { display:block; color:var(--muted); font-size:11px; }
-    .metric b { display:block; margin-top:3px; font-size:17px; }
-    details { border:1px solid var(--hair); border-radius:10px; padding:9px 11px; background:rgba(0,0,0,.16); color:var(--muted); font-size:11px; }
-    summary { cursor:pointer; color:var(--text); font-weight:650; }
-    details dt { margin-top:8px; color:var(--text); font-weight:650; }
-    details dd { margin:3px 0 0; line-height:1.55; }
+
+    .resource-grid, .metrics { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:5px; }
+    .metric { min-width:0; padding:7px; border-radius:8px; background:rgba(0,0,0,.20); border:1px solid var(--hair); }
+    .metric small { display:block; color:var(--muted); font-size:9px; white-space:nowrap; }
+    .metric b { display:block; margin-top:2px; font-size:13px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    .hint { color:var(--muted); font-size:9px; line-height:1.35; }
+
+    #helpPopover { position:absolute; z-index:20; right:18px; top:52px; width:min(390px,calc(100vw - 36px)); padding:11px; border-radius:10px; background:#091a1d; border:1px solid rgba(79,214,255,.25); box-shadow:0 14px 38px rgba(0,0,0,.48); color:#a9c3c7; font-size:11px; line-height:1.55; }
+    #helpPopover h3 { margin:0 0 6px; color:var(--text); font-size:12px; }
+    #helpPopover dl { margin:0; display:grid; gap:5px; }
+    #helpPopover dt { color:var(--text); font-weight:700; }
+    #helpPopover dd { margin:0; }
+    #helpPopover[hidden] { display:none; }
+
+    @media(max-width:1100px) {
+      body { overflow:auto; grid-template-rows:auto auto minmax(0,1fr); }
+      .layout { grid-template-columns:1fr; }
+      aside { overflow:visible; }
+      header { flex-wrap:wrap; height:auto; padding:9px 16px; }
+      .header-status { margin-left:0; }
+      .server { width:100%; }
+      .server input { flex:1; width:auto; }
+      .conversation { min-height:65vh; }
+      #helpPopover { position:fixed; right:12px; top:12px; }
+    }
   </style>
 </head>
 <body>
 <header>
   <div class="logo">VW</div>
   <div class="title">
-    <h1>VoxWeft AX8860 实时同传</h1>
-    <small>on-device simultaneous interpretation</small>
+    <h1>VoxWeft AXERA 实时同传</h1>
+    <small>单页操作台 · AX8860 NPU</small>
   </div>
   <div class="header-status"><span class="dot" id="statusDot"></span><span id="status">未连接</span></div>
   <div class="server">
@@ -125,7 +157,10 @@
 </header>
 
 <section class="pipeline" aria-label="Pipeline dashboard">
-  <div class="pipe-label">ASR · translate · speak</div>
+  <div class="pipe-heading">
+    <b>Pipeline</b>
+    <small>ASR · 翻译 · 流式语音合成</small>
+  </div>
   <div class="pipe-row">
     <div class="node asr" id="nodeAsr"><b>ASR</b><span>listen</span></div>
     <div class="wire" id="wireAsr"><i></i><em></em></div>
@@ -137,50 +172,46 @@
 
 <div class="layout">
   <section class="conversation">
-    <div class="conversation-main">
-      <div class="section-head">
-        <b>转写与译文</b>
-        <div class="row" style="display:flex;gap:8px">
-          <small id="routeText">zh → en</small>
+    <div class="section-head">
+      <b>转写与译文</b>
+      <div class="section-right">
+        <small id="routeText">zh → en</small>
         <button id="exportTurns" class="quiet">导出</button>
-          <button id="clear" class="quiet">清空</button>
-        </div>
+        <button id="clear" class="quiet">清空</button>
       </div>
-      <div class="turns" id="turns">
-        <div class="empty" id="emptyState">
-          <div class="logo">VW</div>
-          <b>按住按钮说话，或输入文字测试</b>
-          <div>语音会被实时切分；每一段依次经过 Qwen3-ASR、Hy-MT2 和 VoxCPM2，并在 AX8860 上完成推理。</div>
-        </div>
-      </div>
-      <div class="notice" id="notice"></div>
-      <form id="textForm" class="composer">
-        <input id="textInput" placeholder="输入文本，跳过 ASR，直接翻译并合成" autocomplete="off">
-        <button id="sendText" class="primary" type="submit">发送</button>
-      </form>
     </div>
+    <div class="turns" id="turns">
+      <div class="empty" id="emptyState">
+        <div class="logo">VW</div>
+        <b>按住按钮说话，或输入文字测试</b>
+        <div>语音会实时切分；每段依次经过 Qwen3-ASR、Hy-MT2 和 VoxCPM2，并在 AX8860 上完成推理。</div>
+      </div>
+    </div>
+    <div class="notice" id="notice"></div>
+    <form id="textForm" class="composer">
+      <input id="textInput" placeholder="输入文本，跳过 ASR，直接翻译并合成" autocomplete="off">
+      <button id="sendText" class="primary" type="submit">发送</button>
+    </form>
   </section>
 
   <aside>
-    <section style="border:0;background:transparent;padding:0">
-      <div class="side-title"><b>当前模型</b><small id="modelBackend">AX8860 NPU</small></div>
-      <div class="model-grid" id="modelGrid">
-        <div class="model-card"><div class="model-stage">ASR</div><div class="model-name">Qwen3-ASR-1.7B</div><div class="model-meta">1.7B · 语音识别</div></div>
-        <div class="model-card"><div class="model-stage">翻译</div><div class="model-name">Hy-MT2-1.8B</div><div class="model-meta">1.8B · 多语种翻译</div></div>
-        <div class="model-card"><div class="model-stage">TTS</div><div class="model-name">VoxCPM2</div><div class="model-meta">约 2B · 流式语音合成</div></div>
+    <section class="panel">
+      <div class="panel-title">
+        <b>当前模型</b><small id="modelBackend">AX8860 NPU</small>
+        <button class="help" type="button" data-help="models">?</button>
+      </div>
+      <div class="models" id="modelGrid">
+        <div class="model-card"><div class="model-stage">ASR</div><div class="model-name">Qwen3-ASR</div><div class="model-meta">读取中</div></div>
+        <div class="model-card"><div class="model-stage">翻译</div><div class="model-name">Hy-MT2</div><div class="model-meta">读取中</div></div>
+        <div class="model-card"><div class="model-stage">TTS</div><div class="model-name">VoxCPM2</div><div class="model-meta">读取中</div></div>
       </div>
     </section>
 
-    <section style="border:0;background:transparent;padding:0">
-      <div class="side-title"><b>音频电平</b><small>输入 / 输出</small></div>
-      <div class="settings">
-        <div class="level-row"><small>MIC</small><div class="level-bar"><span class="level-fill" id="micLevel"></span></div></div>
-        <div class="level-row"><small>OUT</small><div class="level-bar"><span class="level-fill" id="outLevel"></span></div></div>
+    <section class="panel">
+      <div class="panel-title">
+        <b>会话控制</b><small>8 语种</small>
+        <button class="help" type="button" data-help="session">?</button>
       </div>
-    </section>
-
-    <section style="border:0;background:transparent;padding:0">
-      <div class="side-title"><b>会话</b><small>8 语种</small></div>
       <div class="settings">
         <div class="language-row">
           <label>源语言
@@ -208,43 +239,48 @@
         <button id="talk" class="talk" disabled>按住此处说话</button>
         <div class="side-actions">
           <button id="interrupt" class="danger" disabled>打断</button>
-          <button id="resetSession" class="ghost">重置会话</button>
+          <button id="resetSession" class="ghost">重置</button>
+          <button id="playIntro" class="ghost" type="button">演示</button>
         </div>
-        <div class="hint">浏览器只在 localhost 或 HTTPS 页面允许麦克风。远程 HTTP 访问时请使用下方文字输入。</div>
-        <button id="playIntro" class="ghost" type="button">▶ 播放演示文本</button>
       </div>
     </section>
 
-    <section style="border:0;background:transparent;padding:0">
-      <div class="side-title"><b>本轮指标</b><small>分段口径</small></div>
-      <div class="metrics">
-        <div class="metric" title="已提交语音段的 ASR 服务耗时；不含麦克风采集、VAD 和等待松手。"><small>ASR 延迟</small><b id="mAsr">—</b></div>
-        <div class="metric" title="从发起翻译请求到取得目标文本；不含 ASR 与 TTS。"><small>翻译延迟</small><b id="mMt">—</b></div>
-        <div class="metric" title="从发起 TTS 请求到收到第一块可播放 PCM；不含 ASR 与翻译。"><small>TTS 首包</small><b id="mTts">—</b></div>
-        <div class="metric" title="本轮发送音频按 48 kHz 折算的时长。"><small>输出音频</small><b id="mAudio">—</b></div>
+    <section class="panel">
+      <div class="panel-title">
+        <b>板端资源</b><small id="resourceState">读取中</small>
+        <button class="help" type="button" data-help="resources">?</button>
       </div>
-      <details style="margin-top:10px">
-        <summary>指标口径说明</summary>
-        <dl>
-          <dt>ASR 延迟</dt><dd>已提交语音段的 ASR 耗时，含 WAV/Base64 封装、HTTP、推理与解析；不含麦克风采集、VAD 和按住按钮等待。</dd>
-          <dt>翻译延迟</dt><dd>构造 Hy-MT2 请求到取得译文；不含 ASR 与 TTS。空结果重试会计入。</dd>
-          <dt>TTS 首包</dt><dd>发起 VoxCPM2 请求到收到第一块可播放 PCM；不含 ASR、翻译或排队等待。</dd>
-          <dt>输出音频</dt><dd>已发送 PCM 按 48 kHz 折算的时长；打断时只统计已发送部分。</dd>
-        </dl>
-      </details>
-    </section>
-
-    <section style="border:0;background:transparent;padding:0">
-      <div class="side-title"><b>板端资源</b><small id="resourceState">读取中</small></div>
       <div class="resource-grid">
         <div class="metric"><small>OS 可用</small><b id="rOs">—</b></div>
         <div class="metric"><small>CMM 已用</small><b id="rCmm">—</b></div>
         <div class="metric"><small>llama RSS</small><b id="rRss">—</b></div>
         <div class="metric"><small>NPU 温度</small><b id="rTemp">—</b></div>
       </div>
-      <div class="hint" style="margin-top:8px">来自板端 tempmon；页面每 5 秒刷新，用于观察长时间运行是否出现内存增长。</div>
+    </section>
+
+    <section class="panel" style="display:grid; grid-template-rows:auto auto minmax(0,1fr); min-height:0;">
+      <div class="panel-title">
+        <b>本轮指标与电平</b><small>分段口径</small>
+        <button class="help" type="button" data-help="metrics">?</button>
+      </div>
+      <div class="levels">
+        <div class="level-row"><small>MIC</small><div class="level-bar"><span class="level-fill" id="micLevel"></span></div></div>
+        <div class="level-row"><small>OUT</small><div class="level-bar"><span class="level-fill" id="outLevel"></span></div></div>
+      </div>
+      <div class="metrics" style="margin-top:7px; align-content:start;">
+        <div class="metric"><small>ASR 延迟</small><b id="mAsr">—</b></div>
+        <div class="metric"><small>翻译延迟</small><b id="mMt">—</b></div>
+        <div class="metric"><small>TTS 首包</small><b id="mTts">—</b></div>
+        <div class="metric"><small>输出音频</small><b id="mAudio">—</b></div>
+        <div class="hint" style="grid-column:1/-1;">点击右上角 “?” 查看完整指标口径；对话区内部滚动，页面本身保持单屏。</div>
+      </div>
     </section>
   </aside>
+</div>
+
+<div id="helpPopover" hidden>
+  <h3 id="helpTitle"></h3>
+  <div id="helpContent"></div>
 </div>
 
 <script>
@@ -515,6 +551,57 @@ $('textForm').onsubmit=e=>{
 $('server').value=defaultServer(); $('connect').onclick=connect;
 setStage('idle'); updateRoute(); renderTurns(); loadHealth(); setInterval(loadHealth,5000);
 setInterval(renderLevels,50);
+
+const HELP_INFO={
+  models:{
+    title:'当前模型说明',
+    html:`<dl>
+      <dt>ASR</dt><dd>Qwen3-ASR-1.7B，通过 OpenAI-compatible chat API 接收 WAV/Base64 音频并返回识别文本。</dd>
+      <dt>翻译</dt><dd>Hy-MT2-1.8B，支持 zh/en/ja/ko/fr/de/ru/es 八种语言；服务端使用 --no-cache-prompt 避免重复 prompt 空返回。</dd>
+      <dt>TTS</dt><dd>VoxCPM2，支持流式 PCM、默认预设音色和参考音色克隆。模型权重均运行在 AX8860 板端。</dd>
+    </dl>`
+  },
+  session:{
+    title:'会话与麦克风说明',
+    html:`<dl>
+      <dt>语言</dt><dd>源语言和目标语言不能相同。文字模式会跳过 ASR，直接进入翻译和 TTS。</dd>
+      <dt>音色</dt><dd>默认音色更稳定、首包更低；参考音色使用内置参考音频做克隆，适合演示。俄语暂无参考音色，会自动回退默认音色。</dd>
+      <dt>麦克风</dt><dd>浏览器只在 localhost 或 HTTPS 页面允许麦克风采集。远程 HTTP 页面请使用文字输入、演示按钮或 SSH tunnel。</dd>
+    </dl>`
+  },
+  resources:{
+    title:'板端资源说明',
+    html:`<dl>
+      <dt>OS 内存</dt><dd>Linux 可用内存，来自 tempmon <code>/api/stats</code> 的 <code>mem.avail_kb</code>。</dd>
+      <dt>CMM</dt><dd>AXERA NPU 侧 CMM 内存，单位 MB。它和 Linux RSS 是不同内存域，不能用 OS available 代替。</dd>
+      <dt>RSS / 温度</dt><dd>llama RSS 为三个推理进程的宿主机驻留内存总和；NPU 温度取所有 thermal zone 最大值。</dd>
+    </dl>`
+  },
+  metrics:{
+    title:'指标口径说明',
+    html:`<dl>
+      <dt>ASR 延迟</dt><dd>已提交语音段的 ASR 服务耗时，含 WAV/Base64 封装、HTTP、推理与解析；不含麦克风采集、VAD 和按住按钮等待。</dd>
+      <dt>翻译延迟</dt><dd>构造 Hy-MT2 请求到取得译文；不含 ASR 与 TTS，空结果重试会计入。</dd>
+      <dt>TTS 首包</dt><dd>发起 VoxCPM2 请求到收到第一块可播放 PCM；不含 ASR、翻译或排队等待，也不是浏览器喇叭出声的绝对时间。</dd>
+      <dt>输出音频</dt><dd>已发送 PCM 按 48 kHz 折算的时长；打断后只统计已发送部分。</dd>
+    </dl>`
+  }
+};
+const helpPopover=$('helpPopover'), helpTitle=$('helpTitle'), helpContent=$('helpContent');
+let activeHelpKey='';
+function showHelp(key) {
+  if(activeHelpKey===key) { hideHelp(); return; }
+  const item=HELP_INFO[key];
+  if(!item) return;
+  activeHelpKey=key; helpTitle.textContent=item.title; helpContent.innerHTML=item.html;
+  helpPopover.hidden=false;
+}
+function hideHelp() { activeHelpKey=''; helpPopover.hidden=true; }
+document.querySelectorAll('.help').forEach(button=>{
+  button.addEventListener('click',event=>{ event.stopPropagation(); showHelp(button.dataset.help); });
+});
+document.addEventListener('click',event=>{ if(!helpPopover.hidden && !helpPopover.contains(event.target)) hideHelp(); });
+document.addEventListener('keydown',event=>{ if(event.key==='Escape') hideHelp(); });
 </script>
 </body>
 </html>

@@ -26,8 +26,9 @@ def test_ax_demo_intro_mentions_local_ax8860(monkeypatch):
 def test_ax_web_contains_product_controls():
     html = (Path(__file__).parents[1] / "voxweft/runtime/ax_web.html").read_text(encoding="utf-8")
     for marker in (
-        "当前模型", "板端资源", "译员音色", "播放演示文本",
-        "导出", "自动重连", "指标口径说明", "音频电平", "nodeAsr",
+        "单页操作台", "当前模型", "板端资源", "译员音色", "播放演示文本",
+        "导出", "自动重连", "指标口径说明", "本轮指标与电平",
+        "data-help=\"metrics\"", "nodeAsr",
     ):
         assert marker in html
     assert "cmm_total_mb.toFixed(1)} MB" in html
