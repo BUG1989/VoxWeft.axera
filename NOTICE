@@ -17,3 +17,8 @@ Third-party runtime dependencies (MLX, mlx-lm, mlx-audio, Qwen3-ASR, pipecat
 SmartTurn, NLLB-200) retain their own licences; see docs/MODELS.md for the
 model-weight licences, including the CC-BY-NC-4.0 NLLB weights that are
 opt-in only.
+
+The AX8860 Linux backend reuses runtime and UI concepts from the original
+VoxWeft project at https://github.com/HenryZ838978/VoxWeft and calls remote
+AXERA llama.cpp model services. Those model packages and their weights are
+distributed separately by their authors and retain their own terms.

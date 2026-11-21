@@ -5,16 +5,17 @@
 <h1 align="center">VoxWeft</h1>
 
 <p align="center">
-  <b>On-device simultaneous interpretation on Apple Silicon.</b><br>
+  <b>On-device simultaneous interpretation on Apple Silicon and AX8860.</b><br>
   Speech in, translated speech out, streaming — nothing leaves the machine.
 </p>
 
 <p align="center">
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-2ea44f"></a>
-  <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%20%7C%20Apple%20Silicon-black?logo=apple">
+  <img alt="Platform" src="https://img.shields.io/badge/platform-macOS%20%7C%20AX8860-black">
   <img alt="Framework" src="https://img.shields.io/badge/inference-MLX-29F5C2">
   <img alt="Python" src="https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white">
   <img alt="TTS" src="https://img.shields.io/badge/TTS-VoxCPM2-FA9E5C">
+  <img alt="AX8860" src="https://img.shields.io/badge/AX8860-llama.cpp-29F5C2">
   <img alt="Cloud" src="https://img.shields.io/badge/cloud-0%20bytes-critical">
 </p>
 
@@ -273,11 +274,23 @@ samples/       zero-shot zh / lo output, round-trip verified
 
 ## Credits
 
+- [HenryZ838978/VoxWeft](https://github.com/HenryZ838978/VoxWeft) — the
+  original native VoxWeft project. The AX8860 backend reuses its real-time
+  segmenter, orchestrator, interruption model, WebSocket protocol, multilingual
+  voice seed set, and product vocabulary. The macOS shell also provided the
+  reference layout for the Linux WebUI dashboard and per-turn latency cards.
 - [OpenBMB/VoxCPM](https://github.com/OpenBMB/VoxCPM) — the model. Tokenizer-free
   turned out to be exactly right for low-resource languages: no RVQ codebook
   to be out-of-distribution on.
 - [ml-explore/mlx](https://github.com/ml-explore/mlx) — the array framework
   that made the port a one-day job (and the debugging a two-week one).
 - Qwen3-ASR, mlx-lm, mlx-audio, pipecat SmartTurn — the Lego.
+- [AXERA-TECH](https://huggingface.co/AXERA-TECH) — the AX8860 llama.cpp model
+  packages used by the Linux backend, including Qwen3-ASR, HY-MT2, and VoxCPM2.
 
-Apache-2.0.
+## License
+
+VoxWeft is released under the [Apache License 2.0](LICENSE). See
+[NOTICE](NOTICE) for upstream attribution and separate model-weight terms.
+Model checkpoints and board runtime packages remain under their own licenses
+and are not distributed by this repository.
