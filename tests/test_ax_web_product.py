@@ -30,3 +30,5 @@ def test_ax_web_contains_product_controls():
         "导出", "自动重连", "指标口径说明", "音频电平", "nodeAsr",
     ):
         assert marker in html
+    assert "cmm_total_mb.toFixed(1)} MB" in html
+    assert "cmm_total_mb.toFixed(1)} GB" not in html

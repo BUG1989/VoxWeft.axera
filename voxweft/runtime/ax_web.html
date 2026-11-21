@@ -362,7 +362,7 @@ function renderResources(resources) {
   $('resourceState').textContent=warnings.length?`在线 · ${warnings.join('；')}`:'在线';
   $('resourceState').style.color=warnings.length?'var(--danger)':'var(--muted)';
   $('rOs').textContent=`${resources.os_available_mb.toFixed(0)} MB`;
-  $('rCmm').textContent=`${resources.cmm_used_mb.toFixed(1)} / ${resources.cmm_total_mb.toFixed(1)} GB`;
+  $('rCmm').textContent=`${resources.cmm_used_mb.toFixed(1)} / ${resources.cmm_total_mb.toFixed(1)} MB`;
   $('rRss').textContent=`${resources.llama_rss_mb.toFixed(1)} MB`;
   $('rTemp').textContent=resources.npu_temp_max_c==null?'—':`${resources.npu_temp_max_c.toFixed(1)} °C`;
 }
