@@ -13,6 +13,20 @@ Qwen3-ASR → HY-MT2 → VoxCPM2
 
 ---
 
+## WebUI 预览
+
+单页操作台包含 Pipeline 状态、转写 / 译文卡片、当前模型、会话控制、板端资源和
+分段指标。右上角的 “?” 提供对应口径说明。
+
+![VoxWeft AXERA single-screen WebUI](docs/media/axera-webui.png)
+
+下面是一段无麦克风演示：点击“演示”后，文本依次经过 HY-MT2 翻译和 VoxCPM2
+流式合成，界面同步显示 Pipeline 状态、译文卡片和延迟指标。
+
+![VoxWeft AXERA demo playback](docs/media/axera-demo.gif)
+
+---
+
 ## 当前能力
 
 - 实时语音同传：`ASR → 翻译 → 流式 TTS`
