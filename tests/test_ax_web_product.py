@@ -33,6 +33,8 @@ def test_ax_web_contains_product_controls():
         "SSH tunnel", ".talk.unavailable",
         "导入音频", "audioFileInput", "decodeAudioFileToMono16k",
         "uploadAudioFile", "音频导入完成",
+        "offlineServiceLabels", "AX8860 NPU · ${offlineLabels.join(' / ')} 离线",
+        "resume_speech", "▶ 继续语音", "clearResumeSpeech",
     ):
         assert marker in html
     assert "cmm_total_mb.toFixed(1)} MB" in html

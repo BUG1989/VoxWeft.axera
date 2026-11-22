@@ -39,6 +39,8 @@ AX_ASR_MODEL = os.environ.get("AX_ASR_MODEL", "default")
 AX_MT_MODEL = os.environ.get("AX_MT_MODEL", "default")
 AX_TTS_MODEL = os.environ.get("AX_TTS_MODEL", "voxcpm2")
 AX_TIMEOUT = float(os.environ.get("AX_TIMEOUT", "300"))
+AX_HTTP_RETRY_LIMIT = int(os.environ.get("AX_HTTP_RETRY_LIMIT", "2"))
+AX_HTTP_RETRY_DELAY = float(os.environ.get("AX_HTTP_RETRY_DELAY", "0.5"))
 AX_TTS_CHUNK_SAMPLES = int(os.environ.get("AX_TTS_CHUNK_SAMPLES", "9600"))
 AX_VOICE_DIR = Path(os.environ.get(
     "AX_VOICE_DIR", Path(__file__).resolve().parents[2] / "samples" / "voices"))
@@ -158,17 +160,45 @@ def available_voices() -> list[dict[str, object]]:
 
 
 def _post_json(base: str, payload: dict, timeout: float | None = None) -> str:
-    response = requests.post(
-        f"{base}/chat/completions",
-        json=payload,
-        timeout=timeout or AX_TIMEOUT,
-    )
-    if response.status_code >= 400:
-        raise RuntimeError(
-            f"AX8860 endpoint {base}/chat/completions returned "
-            f"HTTP {response.status_code}: {response.text[:500]}"
-        )
-    result = response.json()
+    url = f"{base}/chat/completions"
+    attempt = 0
+    while True:
+        response = None
+        try:
+            response = requests.post(
+                url,
+                json=payload,
+                timeout=timeout or AX_TIMEOUT,
+            )
+            if response.status_code >= 500 and attempt < AX_HTTP_RETRY_LIMIT:
+                response.close()
+                attempt += 1
+                logging.getLogger(__name__).warning(
+                    "AX HTTP %s from %s; retry %d/%d",
+                    response.status_code, url, attempt, AX_HTTP_RETRY_LIMIT,
+                )
+                time.sleep(AX_HTTP_RETRY_DELAY * attempt)
+                continue
+            if response.status_code >= 400:
+                raise RuntimeError(
+                    f"AX8860 endpoint {url} returned "
+                    f"HTTP {response.status_code}: {response.text[:500]}"
+                )
+            result = response.json()
+        except (requests.ConnectionError, requests.Timeout, json.JSONDecodeError) as exc:
+            if attempt >= AX_HTTP_RETRY_LIMIT:
+                raise RuntimeError(f"AX8860 endpoint {url} failed after retries: {exc}") from exc
+            attempt += 1
+            logging.getLogger(__name__).warning(
+                "AX HTTP transient failure from %s (%s); retry %d/%d",
+                url, exc, attempt, AX_HTTP_RETRY_LIMIT,
+            )
+            time.sleep(AX_HTTP_RETRY_DELAY * attempt)
+            continue
+        finally:
+            if response is not None:
+                response.close()
+        break
     try:
         return result["choices"][0]["message"]["content"]
     except (KeyError, IndexError, TypeError) as exc:
@@ -319,6 +349,43 @@ def _sample_rate(response: requests.Response) -> int:
     return 48000
 
 
+def _open_tts_stream(payload: dict[str, object]) -> requests.Response:
+    url = f"{AX_TTS_BASE}/audio/speech"
+    attempt = 0
+    while True:
+        try:
+            response = requests.post(
+                url,
+                json=payload,
+                stream=True,
+                timeout=(min(AX_TIMEOUT, 30), AX_TIMEOUT),
+            )
+            if response.status_code >= 500 and attempt < AX_HTTP_RETRY_LIMIT:
+                response.close()
+                attempt += 1
+                logging.getLogger(__name__).warning(
+                    "AX TTS HTTP %s; retry %d/%d",
+                    response.status_code, attempt, AX_HTTP_RETRY_LIMIT,
+                )
+                time.sleep(AX_HTTP_RETRY_DELAY * attempt)
+                continue
+            if response.status_code >= 400:
+                try:
+                    response.raise_for_status()
+                finally:
+                    response.close()
+            return response
+        except (requests.ConnectionError, requests.Timeout) as exc:
+            if attempt >= AX_HTTP_RETRY_LIMIT:
+                raise RuntimeError(f"AX8860 TTS endpoint failed after retries: {exc}") from exc
+            attempt += 1
+            logging.getLogger(__name__).warning(
+                "AX TTS transient failure (%s); retry %d/%d",
+                exc, attempt, AX_HTTP_RETRY_LIMIT,
+            )
+            time.sleep(AX_HTTP_RETRY_DELAY * attempt)
+
+
 def synthesize_stream(text: str, voice: str | None = None) -> Iterator[np.ndarray]:
     """Yield float32 mono chunks from AX8860 VoxCPM2 streamed PCM.
 
@@ -334,14 +401,7 @@ def synthesize_stream(text: str, voice: str | None = None) -> Iterator[np.ndarra
         "stream": True,
     }
     payload.update(_reference_voice(voice))
-    response = requests.post(
-        f"{AX_TTS_BASE}/audio/speech",
-        json=payload,
-        stream=True,
-        timeout=(min(AX_TIMEOUT, 30), AX_TIMEOUT),
-    )
-    if response.status_code >= 400:
-        response.raise_for_status()
+    response = _open_tts_stream(payload)
 
     rate = _sample_rate(response)
     if rate != 48000:

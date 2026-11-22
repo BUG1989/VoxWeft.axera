@@ -99,6 +99,8 @@
     .model-name { margin-top:2px; font-size:11px; font-weight:750; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .model-meta { margin-top:3px; color:var(--muted); font-size:9px; line-height:1.35; }
     .model-meta:last-child { color:var(--weft); }
+    .model-card.unavailable { border-color:rgba(255,135,133,.40); background:rgba(255,135,133,.08); }
+    .model-card.unavailable .model-meta:last-child { color:var(--danger); }
 
     .settings { display:grid; gap:6px; }
     .language-row { display:grid; grid-template-columns:minmax(0,1fr) 14px minmax(0,1fr); gap:5px; align-items:end; }
@@ -295,17 +297,36 @@ let manualDisconnect=false, reconnectAttempts=0, reconnectTimer=null, lastConfig
 let connectionId=0;
 let demoQueue=[], demoTimer=null, activeAudioSources=new Set();
 let micLevelValue=0, outLevelValue=0;
+let serviceHealth={asr:false, translation:false, tts:false};
 let uploadActive=false, uploadSending=false, uploadSegments=0, uploadCompleted=0, uploadTimer=null;
+let resumeSpeechAvailable=false;
 const micSupported=Boolean(navigator.mediaDevices?.getUserMedia);
 const stages={asr:$('nodeAsr'),mt:$('nodeMt'),tts:$('nodeTts')}, wires={asr:$('wireAsr'),mt:$('wireMt')};
 const languageNames={zh:'ZH',en:'EN',ja:'JA',ko:'KO',fr:'FR',de:'DE',ru:'RU',es:'ES'};
+const serviceLabels={asr:'ASR',translation:'MT',tts:'TTS'};
 
 function setStatus(text,tone='normal') {
   statusEl.textContent=text; statusDot.className='dot'+(tone==='good'?' on':'');
 }
 function setNotice(text) { notice=text||''; noticeEl.textContent=notice; }
 function setMetric(id,value) { $(id).textContent=value; }
+function servicePort(endpoint) {
+  try { return new URL(endpoint).port; } catch { return ''; }
+}
+function offlineServiceLabels(endpoints={}) {
+  return Object.entries(serviceHealth)
+    .filter(([,online])=>!online)
+    .map(([key])=>{
+      const port=servicePort(endpoints[key]);
+      return port?`${serviceLabels[key]}(:${port})`:serviceLabels[key];
+    });
+}
+function clearResumeSpeech() {
+  resumeSpeechAvailable=false;
+  if(!demoQueue.length) $('playIntro').textContent='▶ 播放演示文本';
+}
 function updateMicAvailability(connected=false) {
+  const servicesReady=serviceHealth.asr&&serviceHealth.translation&&serviceHealth.tts;
   if(!micSupported) {
     // Keep this button actionable: clicking it explains the browser security
     // policy and the localhost/SSH-tunnel options instead of showing a dead control.
@@ -317,9 +338,9 @@ function updateMicAvailability(connected=false) {
     return;
   }
   $('talk').classList.remove('unavailable');
-  $('talk').title='';
-  $('talk').disabled=!(connected || ws?.readyState===1);
-  if($('talk').disabled) $('talk').textContent='按住此处说话';
+  $('talk').title=servicesReady?'':'ASR / 翻译 / TTS 服务未全部在线';
+  $('talk').disabled=!(connected || ws?.readyState===1)||!servicesReady;
+  if($('talk').disabled) $('talk').textContent=servicesReady?'按住此处说话':'模型服务未就绪';
 }
 function pushMicLevel(samples) {
   let sum=0; for(let i=0;i<samples.length;i++) sum+=samples[i]*samples[i];
@@ -351,8 +372,10 @@ function updateRoute() {
   const same=$('src').value===$('tgt').value;
   $('routeText').textContent=same?'源语言和目标语言不能相同':`${$('src').value} → ${$('tgt').value}`;
   const busy=activeTurn||uploadActive;
-  $('sendText').disabled=busy||same; $('sendText').textContent=same?'语言相同':(busy?'生成中…':'发送');
-  $('uploadAudio').disabled=uploadActive||activeTurn||recording;
+  const actionsReady=serviceHealth.translation&&serviceHealth.tts;
+  $('sendText').disabled=busy||same||!actionsReady;
+  $('sendText').textContent=same?'语言相同':(!actionsReady?'服务未就绪':(busy?'生成中…':'发送'));
+  $('uploadAudio').disabled=uploadActive||activeTurn||recording||!actionsReady||!serviceHealth.asr;
   $('audioFileInput').disabled=uploadActive||activeTurn||recording;
 }
 
@@ -400,16 +423,38 @@ async function loadModels() {
     const res=await fetch('/health'); if(!res.ok) throw new Error(`HTTP ${res.status}`);
     const health=await res.json(), models=health?.ax8860?.models||[], resources=health?.ax8860?.resources;
     renderResources(resources);
-    $('modelBackend').textContent=health.backend==='ax8860'?'AX8860 NPU':health.backend;
+    const nextHealth={asr:false,translation:false,tts:false};
+    for(const model of models) {
+      if(model.stage==='ASR') nextHealth.asr=Boolean(model.ok);
+      if(model.stage==='翻译') nextHealth.translation=Boolean(model.ok);
+      if(model.stage==='TTS') nextHealth.tts=Boolean(model.ok);
+    }
+    serviceHealth=nextHealth;
+    const endpoints=health?.ax8860?.endpoints||{};
+    const offlineLabels=offlineServiceLabels(endpoints);
+    $('modelBackend').textContent=offlineLabels.length
+      ? `AX8860 NPU · ${offlineLabels.join(' / ')} 离线`
+      : 'AX8860 NPU';
     if(!models.length) return;
+    const ports={
+      asr:servicePort(endpoints.asr),
+      translation:servicePort(endpoints.translation),
+      tts:servicePort(endpoints.tts),
+    };
+    const stageKeys={'ASR':'asr','翻译':'translation','TTS':'tts'};
     $('modelGrid').innerHTML=models.map(m=>`
-      <div class="model-card">
+      <div class="model-card ${m.ok?'':'unavailable'}">
         <div class="model-stage">${m.stage}</div>
         <div class="model-name">${m.name}</div>
         <div class="model-meta">参数量 ${m.parameters} · ${m.description}</div>
-        <div class="model-meta">${m.ok?'服务在线':'服务不可用'}${m.runtime_models?.length?' · 已加载':''}</div>
+        <div class="model-meta">${m.ok?'服务在线':'服务不可用'}${ports[stageKeys[m.stage]] ? ` · :${ports[stageKeys[m.stage]]}` : ''}${m.runtime_models?.length?' · 已加载':''}</div>
       </div>`).join('');
-  } catch(err) { $('modelBackend').textContent='模型状态获取失败'; }
+  } catch(err) {
+    serviceHealth={asr:false,translation:false,tts:false};
+    $('modelBackend').textContent='模型状态获取失败';
+  }
+  updateRoute();
+  updateMicAvailability(ws?.readyState===1);
 }
 function renderResources(resources) {
   if(!resources) { $('resourceState').textContent='不可用'; $('resourceState').style.color='var(--danger)'; return; }
@@ -417,7 +462,7 @@ function renderResources(resources) {
   const warnings=[];
   if(resources.os_available_mb<2048) warnings.push('OS可用内存低');
   if(resources.cmm_used_mb/resources.cmm_total_mb>0.94) warnings.push('CMM占用高');
-  if(resources.llama_process_count!==3) warnings.push('进程数异常');
+  if(!serviceHealth.asr||!serviceHealth.translation||!serviceHealth.tts) warnings.push('模型服务异常');
   if(resources.npu_temp_max_c!=null && resources.npu_temp_max_c>=90) warnings.push('NPU温度高');
   $('resourceState').textContent=warnings.length?`在线 · ${warnings.join('；')}`:'在线';
   $('resourceState').style.color=warnings.length?'var(--danger)':'var(--muted)';
@@ -491,13 +536,24 @@ function handleJson(ev) {
       addTurn({seq:Number(ev.seq||0),id:`seq-${ev.seq}-${Date.now()}`,src:'',out:''}); setBusy(true); setStage('asr'); break;
     case 'asr': patchTurn(ev,{src:ev.text||'',asrMs:Math.round(ev.latency_ms||0)}); setMetric('mAsr',`${Math.round(ev.latency_ms||0)} ms`); setStage('mt'); break;
     case 'translation': patchTurn(ev,{out:ev.text||'',mtMs:Math.round(ev.latency_ms||0)}); setMetric('mMt',`${Math.round(ev.latency_ms||0)} ms`); setStage('tts'); break;
+    case 'speech_chunk_start':
+      setNotice(`语音分段 ${ev.index+1}/${ev.total}：正在合成`);
+      break;
+    case 'speech_chunk_retry':
+      setNotice(`语音分段 ${ev.index+1}/${ev.total} 失败，第 ${ev.attempt} 次重试`);
+      break;
+    case 'speech_chunk_end':
+      setNotice(`语音分段 ${ev.index+1}/${ev.total} 完成`);
+      break;
     case 'audio_start': patchTurn(ev,{firstAudioMs:Math.round(ev.tts_latency_ms||0)}); setMetric('mTts',`${Math.round(ev.tts_latency_ms||0)} ms`); setStage('tts'); break;
     case 'audio_end': patchTurn(ev,{audioS:(ev.samples||0)/48000}); setMetric('mAudio',`${((ev.samples||0)/48000).toFixed(2)} s`); break;
     case 'turn_end':
+      clearResumeSpeech();
       if(uploadActive) { uploadCompleted++; maybeFinishUpload(); }
       setBusy(false); setStage('idle'); if(configDirty) configure(true); sendNextDemoLine(); break;
     case 'interrupted':
       setNotice(`已打断：${ev.reason||''}`);
+      demoQueue=[]; clearTimeout(demoTimer); clearResumeSpeech();
       if(uploadActive && ev.reason!=='ptt_start') finishUpload(true);
       setBusy(false); setStage('idle'); sendNextDemoLine(); break;
     case 'no_speech':
@@ -506,6 +562,13 @@ function handleJson(ev) {
       setBusy(false); setStage('idle'); break;
     case 'error':
       setNotice(`${ev.stage||'pipeline'}: ${ev.message||''}`);
+      if(ev.stage==='speech_chunk'&&ev.resumable) {
+        demoQueue=[]; clearTimeout(demoTimer);
+        resumeSpeechAvailable=true;
+        $('playIntro').textContent='▶ 继续语音';
+      } else {
+        demoQueue=[]; clearTimeout(demoTimer); clearResumeSpeech();
+      }
       if(uploadActive) { uploadCompleted++; maybeFinishUpload(); }
       setBusy(false); setStage('idle'); break;
   }
@@ -565,6 +628,10 @@ function finishUpload(interrupted) {
 async function uploadAudioFile(file) {
   if(uploadActive||activeTurn||recording||demoQueue.length) return;
   if(!ws||ws.readyState!==1) { setNotice('请先连接服务'); return; }
+  if(!(serviceHealth.asr&&serviceHealth.translation&&serviceHealth.tts)) {
+    setNotice('ASR / 翻译 / TTS 服务未全部在线，暂不能导入音频');
+    return;
+  }
   try {
     uploadActive=true; uploadSending=true; uploadSegments=0; uploadCompleted=0;
     setBusy(true); setStage('listening');
@@ -649,7 +716,7 @@ function stopMic() {
   try{mediaSourceNode?.disconnect();}catch{} try{workletNode?.disconnect();}catch{} try{mediaStream?.getAudioTracks().forEach(track=>track.stop());}catch{} try{captureContext?.close();}catch{}
   workletNode=null;mediaSourceNode=null;mediaStream=null;captureContext=null;
 }
-$('resetSession').onclick=()=>{turns=[];renderTurns();setNotice('');send({type:'reset'});setStage('listening');};
+$('resetSession').onclick=()=>{turns=[];renderTurns();setNotice('');clearResumeSpeech();send({type:'reset'});setStage('listening');};
 $('clear').onclick=()=>{turns=[];renderTurns();setNotice('');};
 $('disconnect').onclick=()=>{manualDisconnect=true;clearTimeout(reconnectTimer);ws?.close();};
 $('talk').onpointerdown=e=>{
@@ -681,8 +748,17 @@ $('exportTurns').onclick=()=>{
   a.href=url; a.download=`voxweft-turns-${new Date().toISOString().replace(/[:.]/g,'-')}.json`; a.click(); URL.revokeObjectURL(url);
 };
 $('playIntro').onclick=async()=>{
+  if(resumeSpeechAvailable){
+    if(!ws||ws.readyState!==1) { setNotice('请先连接服务'); return; }
+    clearResumeSpeech();
+    setNotice('正在继续未完成的语音分段');
+    setBusy(true); setStage('tts');
+    send({type:'resume_speech'});
+    return;
+  }
   if(demoQueue.length){demoQueue=[];clearTimeout(demoTimer);send({type:'interrupt',reason:'demo_stop'});$('playIntro').textContent='▶ 播放演示文本';return;}
   if(!ws||ws.readyState!==1){setNotice('请先连接服务');return;}
+  if(!(serviceHealth.translation&&serviceHealth.tts)){setNotice('翻译或 TTS 服务未在线，暂不能播放演示');return;}
   try{
     const res=await fetch(`/demo/intro?lang=${encodeURIComponent($('src').value)}`); if(!res.ok) throw new Error(`HTTP ${res.status}`);
     const data=await res.json(); demoQueue=[...data.lines||[]]; $('playIntro').textContent='■ 停止演示'; sendNextDemoLine();
@@ -699,6 +775,8 @@ function sendNextDemoLine() {
 }
 $('textForm').onsubmit=e=>{
   e.preventDefault(); const text=$('textInput').value.trim(); if(!text||activeTurn)return;
+  if(!(serviceHealth.translation&&serviceHealth.tts)){setNotice('翻译或 TTS 服务未在线，暂不能发送');return;}
+  clearResumeSpeech();
   setBusy(true); addTurn({seq:0,id:`text-${Date.now()}`,src:text,out:''}); setStage('mt');
   send({type:'text_input',text,speak_source:false}); $('textInput').value='';
 };

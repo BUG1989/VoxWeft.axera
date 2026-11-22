@@ -64,6 +64,19 @@ class _Cancelled(Exception):
     """用户打断——刻意穿过流水线的信号，不是错误。"""
 
 
+class SpeechSynthesisError(RuntimeError):
+    """A TTS request failed after the orchestrator had taken it over.
+
+    ``sent_samples`` distinguishes a request that failed before audio was
+    emitted from one that failed mid-stream. Callers use it to decide whether a
+    retry is duplicate-free.
+    """
+
+    def __init__(self, message: str, *, sent_samples: int = 0) -> None:
+        super().__init__(message)
+        self.sent_samples = sent_samples
+
+
 class Orchestrator:
     """一条会话。构造时锁定模式与语言对，之后只喂帧和事件。"""
 
@@ -281,6 +294,9 @@ class Orchestrator:
                     await self._turn_interpreter(seq, seg)
             except _Cancelled:
                 log.info("turn %d cancelled", seq)
+            except SpeechSynthesisError as exc:
+                # _synth_consume has already emitted the precise TTS event.
+                log.warning("turn %d TTS failed after %d samples", seq, exc.sent_samples)
             except Exception as e:
                 log.exception("turn %d failed: %s", seq, e)
                 await self.send_json({
@@ -459,16 +475,19 @@ class Orchestrator:
                 eng = self.engines.get("qwen3asr") or self.engines["asr"]
         return eng.transcribe(audio, language=route.lang, hotwords=route.hotwords)
 
-    async def _synth_and_send(self, seq: int, text: str, voice_role: str) -> None:
+    async def _synth_and_send(self, seq: int, text: str, voice_role: str,
+                              *, emit_error: bool = True) -> dict:
         """流式 TTS：边合成边发，首块一出来就 audio_start。
 
         全程持锁——见 `_synth_lock`。串行 worker 下这把锁不争用，它防的是
         兜底通道那条并行路径。
         """
         async with self._synth_lock:
-            await self._synth_locked(seq, text, voice_role)
+            return await self._synth_locked(
+                seq, text, voice_role, emit_error=emit_error)
 
-    async def _synth_locked(self, seq: int, text: str, voice_role: str) -> None:
+    async def _synth_locked(self, seq: int, text: str, voice_role: str,
+                            *, emit_error: bool = True) -> dict:
         tts = self.engines["tts"]
         aq: asyncio.Queue = asyncio.Queue()
         spoken = text or ""
@@ -521,7 +540,8 @@ class Orchestrator:
                         pass
 
         try:
-            await self._synth_consume(seq, aq, gen0, _abort_stream)
+            return await self._synth_consume(
+                seq, aq, gen0, _abort_stream, emit_error=emit_error)
         except asyncio.CancelledError:
             # interrupt() 取消了 text_input/speak 这类旁路任务：走的是这里，
             # 不是下面那条 gen 比较的分支。同样要把 bridge 流掐掉。
@@ -534,7 +554,8 @@ class Orchestrator:
             except Exception:
                 pass
 
-    async def _synth_consume(self, seq, aq, gen0, abort_stream) -> None:
+    async def _synth_consume(self, seq, aq, gen0, abort_stream,
+                             *, emit_error: bool = True) -> dict:
         started = False
         n = 0
         while True:
@@ -559,13 +580,16 @@ class Orchestrator:
                     await self.send_json({
                         "type": "audio_end", "seq": seq, "samples": n,
                         "tts_latency_ms": round(first or 0)})
-                break
+                return {"started": started, "samples": n, "interrupted": False}
             else:
                 log.error("TTS failed (seq=%d): %s", seq, val)
-                await self.send_json({
-                    "type": "error", "stage": "tts", "seq": seq,
-                    "message": str(val)})
-                break
+                if emit_error:
+                    await self.send_json({
+                        "type": "error", "stage": "tts", "seq": seq,
+                        "message": str(val)})
+                raise SpeechSynthesisError(str(val), sent_samples=n) from val
+        # The generation check above can stop consumption without an error event.
+        return {"started": started, "samples": n, "interrupted": True}
 
     async def _run_blocking(self, fn, *a, **kw):
         return await self._loop.run_in_executor(None, lambda: fn(*a, **kw))

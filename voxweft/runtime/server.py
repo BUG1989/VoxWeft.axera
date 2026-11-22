@@ -41,6 +41,8 @@ import uvicorn
 from fastapi import FastAPI, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse
 
+from voxweft.runtime.orchestrator import SpeechSynthesisError
+
 log = logging.getLogger("voxweft.server")
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [%(levelname)s] %(name)s %(message)s")
@@ -91,6 +93,35 @@ DEFAULT_HOTWORDS = {
 
 _SPEECH_SENTENCE_END = "。！？!?；;"
 _SPEECH_CLAUSE_END = "，,、：:"
+_SPEECH_RETRY_LIMIT = int(os.environ.get("VOXWEFT_SPEECH_RETRY_LIMIT", "2"))
+
+
+class SpeechChunkFailure(RuntimeError):
+    """Long-text TTS stopped and a later request can resume from a chunk."""
+
+    def __init__(self, *, index: int, total: int, next_index: int,
+                 chunks: list[str], voice_role: str, sent_samples: int,
+                 message: str, phase: str = "target",
+                 source_text: str = "", translated_text: str = "") -> None:
+        super().__init__(message)
+        self.index = index
+        self.total = total
+        self.next_index = next_index
+        self.chunks = chunks
+        self.voice_role = voice_role
+        self.sent_samples = sent_samples
+        self.message = message
+        self.phase = phase
+        self.source_text = source_text
+        self.translated_text = translated_text
+
+    @property
+    def resumable(self) -> bool:
+        # A failed source-language chunk can always resume the turn: even when
+        # the final source chunk is skipped, translation and target TTS remain.
+        if self.phase == "source":
+            return True
+        return self.next_index < self.total
 
 
 AX_DEMO_INTROS = {
@@ -493,9 +524,31 @@ async def ws_voice_v2(ws: WebSocket, token: str = Query(default="")):
             slog.warning("send_bytes failed: %s", e)
 
     state = {"mode": "interpreter", "src": "zho_Hans", "tgt": "eng_Latn",
-             "hotwords": [], "voice_mode": "default", "orch": None}
+             "hotwords": [], "voice_mode": "default", "orch": None,
+             "pending_speech": None, "resume_active": False}
     ptt_active = False
     frame_buf = b""
+
+    def _clear_pending_speech() -> None:
+        state["pending_speech"] = None
+        state["resume_active"] = False
+
+    def _save_speech_failure(failure: SpeechChunkFailure) -> None:
+        if not failure.resumable:
+            _clear_pending_speech()
+            return
+        state.update({
+            "pending_speech": {
+                "chunks": failure.chunks,
+                "next_index": failure.next_index,
+                "total": failure.total,
+                "voice_role": failure.voice_role,
+                "phase": failure.phase,
+                "text": failure.source_text,
+                "translated": failure.translated_text,
+            },
+            "resume_active": False,
+        })
 
     async def _build_orch():
         """Rebuild the orchestrator for the current session state (language or
@@ -607,6 +660,10 @@ async def ws_voice_v2(ws: WebSocket, token: str = Query(default="")):
                     and new_hotwords == state["hotwords"]
                     and new_voice_mode == state["voice_mode"]
                 )
+                if not unchanged:
+                    # The saved chunks and voice routing belong to the old
+                    # language pair; a stale resume would speak the wrong side.
+                    _clear_pending_speech()
                 state.update(mode=new_mode, src=new_src, tgt=new_tgt,
                              hotwords=new_hotwords, voice_mode=new_voice_mode)
                 if unchanged and state.get("orch") is not None:
@@ -625,6 +682,7 @@ async def ws_voice_v2(ws: WebSocket, token: str = Query(default="")):
             elif mt == "ptt_start":
                 # Pressing implies interrupt: the user is about to say the next
                 # thing, so the previous translation need not finish playing.
+                _clear_pending_speech()
                 frame_buf = b""
                 orch = state["orch"]
                 state.update(orphan_frames=0, press_peak_rms=0.0, press_samples=0,
@@ -652,9 +710,11 @@ async def ws_voice_v2(ws: WebSocket, token: str = Query(default="")):
                                      "too_quiet": bool(secs > 0.3 and peak < thresh)})
 
             elif mt == "interrupt":
+                _clear_pending_speech()
                 await state["orch"].interrupt(obj.get("reason") or "client")
 
             elif mt == "reset":
+                _clear_pending_speech()
                 ptt_active = False
                 frame_buf = b""
                 await state["orch"].interrupt("reset")
@@ -662,10 +722,54 @@ async def ws_voice_v2(ws: WebSocket, token: str = Query(default="")):
 
             elif mt == "text_input":
                 txt = (obj.get("text") or "").strip()
+                if txt and state.get("resume_active"):
+                    await send_json({"type": "error", "stage": "text_input",
+                                     "message": "语音续跑尚未结束，请先打断或等待完成"})
+                    continue
                 if txt:
+                    _clear_pending_speech()
                     state["orch"].track_side(_text_turn(
                         state["orch"], txt, send_json,
-                        speak_source=bool(obj.get("speak_source", True))))
+                        speak_source=bool(obj.get("speak_source", True)),
+                        on_speech_failure=_save_speech_failure))
+
+            elif mt == "resume_speech":
+                pending = state.get("pending_speech")
+                if not pending or state.get("resume_active"):
+                    await send_json({"type": "error", "stage": "resume_speech",
+                                     "message": "没有可继续的语音分段"})
+                    continue
+                state["resume_active"] = True
+                state["pending_speech"] = None
+
+                async def _resume_speech():
+                    try:
+                        completed = await _resume_speech_turn(
+                            state["orch"], pending, send_json)
+                        if completed is not None:
+                            await send_json({
+                                "type": "turn_end", "seq": 0,
+                                "sentences": completed, "total_ms": 0,
+                                "resumed": True,
+                            })
+                    except SpeechChunkFailure as failure:
+                        _save_speech_failure(failure)
+                        await send_json({
+                            "type": "error", "stage": "speech_chunk", "seq": 0,
+                            "message": failure.message,
+                            "index": failure.index, "next_index": failure.next_index,
+                            "total": failure.total, "sent_samples": failure.sent_samples,
+                            "resumable": failure.resumable,
+                        })
+                    except Exception as exc:
+                        await send_json({"type": "error", "stage": "resume_speech",
+                                         "message": str(exc)})
+                    finally:
+                        state["resume_active"] = False
+
+                state["orch"].track_side(_resume_speech())
+                await send_json({"type": "resume_ack", "next_index": pending["next_index"],
+                                 "total": pending["total"]})
 
             elif mt == "speak":
                 # Client fallback: render given text directly, skipping ASR and MT.
@@ -675,6 +779,7 @@ async def ws_voice_v2(ws: WebSocket, token: str = Query(default="")):
                 # buffered from the same utterance.
                 txt = (obj.get("text") or "").strip()
                 if txt:
+                    _clear_pending_speech()
                     state["orch"].track_side(_speak_text(state["orch"], txt,
                                                          int(obj.get("seq") or 0), send_json))
 
@@ -770,14 +875,71 @@ def _split_speech_text(text: str, max_chars: int = 180) -> list[str]:
     return chunks
 
 
-async def _speak_text_in_chunks(orch, text: str, voice_role: str) -> int:
+async def _speak_chunks(orch, chunks: list[str], voice_role: str, send_json,
+                        start: int = 0, seq: int = 0, *,
+                        phase: str = "target", source_text: str = "",
+                        translated_text: str = "") -> int:
+    completed = start
+    for index in range(start, len(chunks)):
+        chunk = chunks[index]
+        await send_json({
+            "type": "speech_chunk_start", "seq": seq, "index": index,
+            "total": len(chunks), "text": chunk,
+        })
+        attempt = 0
+        while True:
+            try:
+                result = await orch._synth_and_send(
+                    seq, chunk, voice_role, emit_error=False) or {}
+                await send_json({
+                    "type": "speech_chunk_end", "seq": seq, "index": index,
+                    "total": len(chunks), "samples": result.get("samples", 0),
+                    "interrupted": result.get("interrupted", False),
+                })
+                if result.get("interrupted"):
+                    return completed
+                completed = index + 1
+                break
+            except SpeechSynthesisError as exc:
+                sent_samples = getattr(exc, "sent_samples", 0)
+                if attempt < _SPEECH_RETRY_LIMIT and sent_samples == 0:
+                    attempt += 1
+                    await send_json({
+                        "type": "speech_chunk_retry", "seq": seq,
+                        "index": index, "total": len(chunks), "attempt": attempt,
+                        "message": str(exc),
+                    })
+                    continue
+                # If audio has already been emitted, replaying this chunk would
+                # duplicate audible speech. Resume from the next chunk instead.
+                next_index = index + 1 if sent_samples else index
+                raise SpeechChunkFailure(
+                    index=index,
+                    total=len(chunks),
+                    next_index=next_index,
+                    chunks=chunks,
+                    voice_role=voice_role,
+                    sent_samples=sent_samples,
+                    message=str(exc),
+                    phase=phase,
+                    source_text=source_text,
+                    translated_text=translated_text,
+                ) from exc
+    return completed
+
+
+async def _speak_text_in_chunks(orch, text: str, voice_role: str, send_json,
+                                start: int = 0, seq: int = 0, *,
+                                phase: str = "target", source_text: str = "",
+                                translated_text: str = "") -> int:
     chunks = _split_speech_text(text)
-    for chunk in chunks:
-        await orch._synth_and_send(0, chunk, voice_role)
-    return len(chunks)
+    return await _speak_chunks(
+        orch, chunks, voice_role, send_json, start=start, seq=seq,
+        phase=phase, source_text=source_text, translated_text=translated_text)
 
 
-async def _text_turn(orch, text: str, send_json, speak_source: bool = True):
+async def _text_turn(orch, text: str, send_json, speak_source: bool = True,
+                     on_speech_failure=None):
     """text_input: skip ASR. Interpreter ⇒ MT ⇒ TTS; agent ⇒ LLM ⇒ TTS."""
     try:
         if orch.mode == "agent":
@@ -809,7 +971,9 @@ async def _text_turn(orch, text: str, send_json, speak_source: bool = True):
             # opt out with speak_source=false.
             if speak_source:
                 await send_json({"type": "source_audio", "seq": 0, "text": text})
-                await _speak_text_in_chunks(orch, text, "source")
+                source_count = await _speak_text_in_chunks(
+                    orch, text, "source", send_json,
+                    phase="source", source_text=text)
             tr = await orch._run_blocking(orch.engines["translate"].translate,
                                           text, orch.routes.src, orch.routes.tgt)
             translated = tr.get("text", "")
@@ -817,11 +981,56 @@ async def _text_turn(orch, text: str, send_json, speak_source: bool = True):
                              "text": translated,
                              "latency_ms": round(tr.get("latency_ms", 0))})
             sentence_count = await _speak_text_in_chunks(
-                orch, translated, orch.routes.voice_role)
+                orch, translated, orch.routes.voice_role, send_json,
+                phase="target", source_text=text, translated_text=translated)
             await send_json({"type": "turn_end", "sentences": sentence_count, "total_ms": 0})
+    except SpeechChunkFailure as e:
+        if on_speech_failure is not None:
+            on_speech_failure(e)
+        await send_json({
+            "type": "error",
+            "stage": "speech_chunk",
+            "seq": 0,
+            "message": e.message,
+            "index": e.index,
+            "next_index": e.next_index,
+            "total": e.total,
+            "sent_samples": e.sent_samples,
+            "resumable": e.resumable,
+        })
     except Exception as e:
         message = _friendly_ax_error(e) if AX_BACKEND else str(e)
         await send_json({"type": "error", "stage": "text_input", "message": message})
+
+
+async def _resume_speech_turn(orch, pending: dict, send_json) -> int:
+    """Continue a long text turn without replaying already emitted chunks."""
+    phase = pending.get("phase", "target")
+    completed = await _speak_chunks(
+        orch, pending["chunks"], pending["voice_role"], send_json,
+        start=pending["next_index"], seq=0,
+        phase=phase,
+        source_text=pending.get("text", ""),
+        translated_text=pending.get("translated", ""),
+    )
+    if phase != "source":
+        return completed
+
+    # Source speech has caught up (or skipped its failed partial chunk). Run the
+    # remainder of the original interpreter turn: translation, then target TTS.
+    text = pending.get("text", "")
+    tr = await orch._run_blocking(orch.engines["translate"].translate,
+                                  text, orch.routes.src, orch.routes.tgt)
+    translated = tr.get("text", "")
+    await send_json({"type": "translation", "seq": 0, "src": text,
+                     "text": translated,
+                     "latency_ms": round(tr.get("latency_ms", 0))})
+    target_count = await _speak_text_in_chunks(
+        orch, translated, orch.routes.voice_role, send_json,
+        phase="target", source_text=text, translated_text=translated)
+    # Keep the same meaning as a normal interpreter turn: the count is target
+    # speech chunks, not source plus target.
+    return target_count
 
 
 async def _speak_text(orch, text: str, seq: int, send_json):

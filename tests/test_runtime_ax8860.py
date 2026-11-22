@@ -77,6 +77,87 @@ def test_health_includes_model_catalog(monkeypatch):
     assert result["models"][0]["runtime_models"] == ["fixture-model"]
 
 
+def test_post_json_retries_transient_5xx(monkeypatch):
+    class Response:
+        status_code = 503
+        text = "service unavailable"
+        def close(self): pass
+    responses = iter([
+        Response(),
+        type("Response", (), {
+            "status_code": 200,
+            "text": "",
+            "json": lambda self: {"choices": [{"message": {"content": "ok"}}]},
+            "close": lambda self: None,
+        })(),
+    ])
+    sleeps = []
+    monkeypatch.setattr(ax8860.requests, "post", lambda *args, **kwargs: next(responses))
+    monkeypatch.setattr(ax8860.time, "sleep", lambda value: sleeps.append(value))
+
+    assert ax8860._post_json("http://board/v1", {}) == "ok"
+    assert sleeps == [ax8860.AX_HTTP_RETRY_DELAY]
+
+
+def test_post_json_closes_http_error_response(monkeypatch):
+    class Response:
+        status_code = 400
+        text = "bad request"
+        closed = False
+        def close(self):
+            self.closed = True
+
+    response = Response()
+    monkeypatch.setattr(ax8860.requests, "post", lambda *args, **kwargs: response)
+
+    with pytest.raises(RuntimeError, match="HTTP 400"):
+        ax8860._post_json("http://board/v1", {})
+    assert response.closed is True
+
+
+def test_tts_stream_retries_5xx_and_closes_failed_response(monkeypatch):
+    class Response:
+        def __init__(self, status_code):
+            self.status_code = status_code
+            self.headers = {}
+            self.closed = False
+        def raise_for_status(self):
+            pass
+        def close(self):
+            self.closed = True
+
+    failed = Response(503)
+    responses = [failed, Response(200)]
+    sleeps = []
+    monkeypatch.setattr(
+        ax8860.requests, "post", lambda *args, **kwargs: responses.pop(0))
+    monkeypatch.setattr(ax8860.time, "sleep", lambda value: sleeps.append(value))
+
+    response = ax8860._open_tts_stream({"input": "hello"})
+    assert response.status_code == 200
+    assert failed.closed is True
+    assert sleeps == [ax8860.AX_HTTP_RETRY_DELAY]
+
+
+def test_tts_stream_retries_connection_before_audio(monkeypatch):
+    class Response:
+        status_code = 200
+        headers = {}
+        def raise_for_status(self): pass
+        def close(self): pass
+    calls = {"count": 0}
+    def fake_post(*args, **kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise ax8860.requests.ConnectionError("reset")
+        return Response()
+    monkeypatch.setattr(ax8860.requests, "post", fake_post)
+    monkeypatch.setattr(ax8860.time, "sleep", lambda value: None)
+
+    response = ax8860._open_tts_stream({"input": "hello"})
+    assert response.status_code == 200
+
+
 def test_language_pair_validation():
     assert ax8860.validate_language_pair("zh", "en") == ("zh", "en")
     assert ax8860.supported_languages() == ["de", "en", "es", "fr", "ja", "ko", "ru", "zh"]

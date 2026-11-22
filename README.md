@@ -41,6 +41,9 @@ Qwen3-ASR → HY-MT2 → VoxCPM2
 - 内置无麦克风演示文本
 - VoxCPM2 默认音色与参考音色两种模式
 - WebSocket 自动重连和本地播放打断
+- AX8860 服务健康轮询；模型服务离线时显示具体端口并禁用相关操作
+- ASR / 翻译请求的连接错误、超时、HTTP 5xx 与无效 JSON 自动重试
+- TTS 建连阶段自动重试；长文本按句分段合成，失败后可从后续分段继续
 - 转写与译文 JSON 导出
 - 板端资源采样与报告脚本
 
@@ -108,6 +111,23 @@ WebUI 可选择：
 
 参考音频会在进程内缓存为 16 kHz PCM，降低每次请求的 Base64 体积和板端内存压力。
 缺失参考音色会自动回退到默认音色。
+
+### 瞬时错误与长文本续跑
+
+默认重试策略：
+
+| 环境变量 | 默认值 | 含义 |
+|---|---:|---|
+| `AX_HTTP_RETRY_LIMIT` | `2` | 初始请求后额外重试次数 |
+| `AX_HTTP_RETRY_DELAY` | `0.5` | 第一次重试延迟；后续按次数线性放大 |
+| `VOXWEFT_SPEECH_RETRY_LIMIT` | `2` | 单个长文本 TTS 分段在未输出音频前额外重试次数 |
+
+ASR 与 HY-MT2 的连接错误、超时、HTTP 5xx 和无效 JSON 会自动重试；HTTP 4xx
+视为请求错误，不重试。HY-MT2 返回空结果时，会另行插入唯一 request ID 重试一次。
+
+VoxCPM2 只在建立 HTTP 流之前自动重试。进入音频流之后如果连接中断，runtime 不
+自动重发同一分段，避免用户听到重复语音。长文本协议会返回失败分段、下一段索引
+与 `resumable` 标记；WebUI 可将其显示为“继续语音”，从后续分段继续。
 
 ---
 
@@ -342,6 +362,37 @@ asyncio.run(main())
 PY
 ```
 
+长文本轮次会额外发送分段事件：
+
+```json
+{"type": "speech_chunk_start", "index": 3, "total": 19, "text": "..."}
+{"type": "speech_chunk_retry", "index": 3, "total": 19, "attempt": 1}
+{"type": "speech_chunk_end", "index": 3, "total": 19, "samples": 96000}
+```
+
+如果某个分段已经输出部分 PCM 后失败，服务端返回：
+
+```json
+{
+  "type": "error",
+  "stage": "speech_chunk",
+  "index": 3,
+  "next_index": 4,
+  "total": 19,
+  "sent_samples": 480,
+  "resumable": true
+}
+```
+
+客户端可继续发送：
+
+```json
+{"type": "resume_speech"}
+```
+
+续跑从 `next_index` 开始，不重放已成功分段，也不重放已部分发送的失败分段。若
+失败发生在源语言语音阶段，续跑完成剩余源语音后还会继续执行翻译与目标语言语音。
+
 ---
 
 ## 指标口径
@@ -406,6 +457,9 @@ AX_STATS_URL=http://<board-ip>:8080/api/stats \
 
 - AX 语言路由；
 - HY-MT2 prompt 与空结果重试；
+- AX HTTP 瞬时错误重试与响应释放；
+- 5000 / 10000 字长文本分段完整性；
+- 长文本 TTS 失败续跑与不重放约束；
 - 参考音色 payload；
 - voice mode；
 - WebUI 关键控件；
